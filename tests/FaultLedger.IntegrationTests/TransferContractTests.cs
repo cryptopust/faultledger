@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using FaultLedger.Application.Transfers;
@@ -45,6 +46,26 @@ public sealed class TransferContractTests
     }
 
     [Fact]
+    public async Task HeaderAndBodyIdempotencyKeys_MustAgreeBeforePersistence()
+    {
+        await using var factory = new FaultLedgerApiFactory("Host=127.0.0.1;Port=1;Database=unused;Username=synthetic;Password=synthetic_test_only");
+        using HttpClient client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("Idempotency-Key", "header-key");
+        using HttpResponseMessage response = await client.PostAsJsonAsync("/api/transfers", new
+        {
+            clientReference = "order-1",
+            idempotencyKey = "body-key",
+            amount = 10m,
+            currency = "USD"
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<Microsoft.AspNetCore.Mvc.ProblemDetails>(
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(problem);
+        Assert.Equal("Invalid transfer request", problem.Title);
+    }
+
+    [Fact]
     public void EfModelAndMigrationSnapshot_AgreeOnExactColumnsAndConcurrencyWithoutClaimingDatabaseExecution()
     {
         using var database = new FaultLedgerDbContext(new DbContextOptionsBuilder<FaultLedgerDbContext>()
@@ -61,7 +82,9 @@ public sealed class TransferContractTests
         Assert.False(database.Database.HasPendingModelChanges());
         string script = database.GetService<IMigrator>().GenerateScript();
         Assert.Contains("numeric(28,8)", script, StringComparison.Ordinal);
-        Assert.Contains("ux_transfers_idempotency_key", script, StringComparison.Ordinal);
+        Assert.Contains("uq_transfers_idempotency_key", script, StringComparison.Ordinal);
+        Assert.Contains("request_fingerprint", script, StringComparison.Ordinal);
+        Assert.Contains("fingerprint_version", script, StringComparison.Ordinal);
         Assert.Contains("ck_transfers_state_version", script, StringComparison.Ordinal);
         Assert.DoesNotContain("double precision", script, StringComparison.OrdinalIgnoreCase);
     }

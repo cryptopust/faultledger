@@ -17,7 +17,7 @@ public sealed class ApiExceptionHandler(ILogger<ApiExceptionHandler> logger) : I
         {
             TransferValidationException => (400, "Invalid transfer request", exception.Message),
             BadHttpRequestException => (400, "Invalid request body", "Use the documented JSON contract."),
-            DuplicateTransferKeyException => (409, "Idempotency key already exists", exception.Message),
+            IdempotencyConflictException => (409, "Idempotency conflict", exception.Message),
             TransferConcurrencyException => (409, "Transfer concurrency conflict", exception.Message),
             TransferStorageUnavailableException => (503, "Transfer persistence unavailable", exception.Message),
             ProviderSubmissionException providerException => (502, "Provider submission did not complete",

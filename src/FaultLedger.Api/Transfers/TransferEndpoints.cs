@@ -15,8 +15,9 @@ public static class TransferEndpoints
         return endpoints;
     }
 
-    private static async Task<Created<TransferResponse>> CreateAsync(CreateTransferRequest request,
-        TransferService service, CancellationToken cancellationToken)
+    private static async Task<Results<Created<TransferResponse>, Ok<TransferResponse>>> CreateAsync(
+        CreateTransferRequest request, HttpRequest httpRequest, TransferService service,
+        CancellationToken cancellationToken)
     {
         decimal amount;
         try
@@ -33,9 +34,21 @@ public static class TransferEndpoints
             throw new TransferValidationException(exception.Message);
         }
 
-        TransferDetails transfer = await service.CreateAsync(new CreateTransferCommand(request.ClientReference,
-            request.IdempotencyKey, amount, request.Currency), cancellationToken);
-        return TypedResults.Created($"/api/transfers/{transfer.Id:D}", TransferResponse.FromDetails(transfer));
+        string bodyKey = request.IdempotencyKey ?? string.Empty;
+        string? headerKey = httpRequest.Headers["Idempotency-Key"].FirstOrDefault();
+        if (headerKey is not null && bodyKey.Length > 0 && !string.Equals(headerKey, bodyKey, StringComparison.Ordinal))
+        {
+            throw new TransferValidationException("The Idempotency-Key header and request field must agree.");
+        }
+
+        string idempotencyKey = headerKey ?? bodyKey;
+        TransferCreateOutcome outcome = await service.CreateWithOutcomeAsync(
+            new CreateTransferCommand(request.ClientReference, idempotencyKey, amount, request.Currency),
+            cancellationToken);
+        TransferResponse response = TransferResponse.FromDetails(outcome.Details);
+        return outcome.IsReplay
+            ? TypedResults.Ok(response)
+            : TypedResults.Created($"/api/transfers/{response.Id:D}", response);
     }
 
     private static async Task<Results<Ok<TransferResponse>, NotFound<ProblemDetails>>> FindAsync(Guid id,
@@ -48,7 +61,7 @@ public static class TransferEndpoints
     }
 }
 
-public sealed record CreateTransferRequest(string ClientReference, string IdempotencyKey, JsonElement Amount, string Currency);
+public sealed record CreateTransferRequest(string ClientReference, string? IdempotencyKey, JsonElement Amount, string Currency);
 
 public sealed record TransferResponse(Guid Id, string ClientReference, string IdempotencyKey, decimal Amount,
     string Currency, string State, string? ProviderReference, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, long Version)

@@ -4,7 +4,7 @@ A deterministic .NET engineering failure laboratory for studying distributed
 financial-style orchestration. It is not a payment processor, bank, wallet,
 real-money service, or compliance-certified platform. Synthetic data only.
 
-## Current stage: deterministic provider failure laboratory (2)
+## Current stage: durable idempotency and high-contention concurrency (3)
 
 The existing governance, nine-project .NET 10 solution, health endpoints,
 PostgreSQL development Compose configuration, Dockerfile and CI are retained.
@@ -23,13 +23,18 @@ not skip. Container builds/runtime and remote CI execution remain unverified.
 See the [Stage 1 validation record](docs/runbooks/stage1-validation.md).
 The [bootstrap record](docs/runbooks/bootstrap-validation.md) is historical.
 
-**Not implemented:** canonical idempotency replay/fingerprints, automatic
-Unknown detection, reconciliation, callbacks, inbox/outbox, audit history,
-background workers, Redis, Toxiproxy or business telemetry. Stage 2's provider
-ledger is fake external truth only; it is not PostgreSQL authority and does not
-prove durable idempotency. No automatic retry or repost exists.
-Unknown exists only as a domain state. Duplicate keys fail closed with 409; this
-is not the completed idempotency contract.
+Stage 3 adds versioned SHA-256 request fingerprints, PostgreSQL uniqueness-race
+recovery, same-request replay, explicit same-key/different-request conflicts,
+and a durable `ReadyToSubmit` to `Submitting` claim committed before provider
+I/O. Replays are resolved from PostgreSQL and do not invoke the provider again;
+the fake provider's `SubmissionAttempts` counter remains the external-call
+evidence. The provider ledger is still fake external truth only, not a
+FaultLedger idempotency mechanism.
+
+**Not implemented:** automatic Unknown detection, reconciliation, callbacks,
+inbox/outbox, audit history, background workers, Redis, Toxiproxy or business
+telemetry. No automatic retry or repost exists. A crash after durable
+`Submitting` remains an unresolved recovery boundary for Stage 4.
 Full Definition of Done is not satisfied while PostgreSQL evidence is blocked.
 
 ## Prerequisites

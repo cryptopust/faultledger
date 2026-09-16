@@ -79,12 +79,13 @@ or Application. ITransferStore is a small use-case-specific boundary, not a
 generic repository or an extra UnitOfWork.
 
 The transfers table has a UUID primary key, bounded request/reference strings,
-numeric(28,8) amount, uppercase currency, constrained string state, nullable
-provider reference, timestamptz timestamps and bigint version. Eight CHECK
-constraints protect identity, positive amount, currency, reference/key shapes,
-state/version combinations, accepted-reference consistency and timestamp order.
-The single additional unique index reserves each global idempotency key.
-There are no speculative indexes or fingerprint/audit/inbox/outbox tables.
+versioned SHA-256 request fingerprint, numeric(28,8) amount, uppercase currency,
+constrained string state, nullable provider reference, timestamptz timestamps and
+bigint version. CHECK constraints protect identity, positive amount, currency,
+reference/key/fingerprint shapes, state/version combinations, accepted-reference
+consistency and timestamp order. The named `uq_transfers_idempotency_key` unique
+index reserves each global idempotency key. Fingerprint, audit, inbox and outbox
+are separate concerns; only the fingerprint belongs to Stage 3.
 
 Updates mark only state, provider reference, updated time and version as mutable.
 EF's concurrency predicate compares the original version; a losing writer gets
@@ -102,14 +103,14 @@ does not move transactions around a provider call.
 
 | Step | Already durable | What can fail next / safe disposition |
 | --- | --- | --- |
-| Validate request and construct Created | Nothing for this request | Invalid input returns 400 before persistence/provider work. |
-| Save Created | Immutable request identity/key and version 0 after commit | A lost commit acknowledgement is not rollback proof. Key reservation prevents another insert; no resume algorithm exists. |
-| Mark ready and save | ReadyToSubmit/version 1 after commit | Failed save aborts orchestration before provider. A later observer must not ignore an in-flight owner. |
-| Begin submission and save | Submitting/version 2 after commit | This is durable possible-dispatch intent. A crash before the actual call may still require conservative ambiguity. |
+| Validate request and construct ReadyToSubmit | Nothing for this request | Invalid input returns 400 before persistence/provider work. |
+| Register key, fingerprint and ReadyToSubmit | Immutable request identity, key, fingerprint and version 1 after one PostgreSQL commit | A lost commit acknowledgement is not rollback proof. A same-key retry loads the durable winner; a different fingerprint conflicts. |
+| Claim submission atomically | Submitting/version 2 after one conditional PostgreSQL update | Exactly one contender can claim `ReadyToSubmit/version 1`; losers do not call the provider. |
+| Claim `Submitting` and commit | Submitting/version 2 after the conditional update | This is durable possible-dispatch intent. A crash before the actual call may still require conservative ambiguity. |
 | Invoke provider once | Submitting/version 2 | The provider may accept while response/local certainty is lost. No DB transaction is held across the call. |
 | Receive synthetic acceptance | Still Submitting/version 2 | In-memory success is not durable Accepted evidence. Cancellation or a crash can lose it. |
 | Mark Accepted and save | Accepted/reference/version 3 only after commit | A failed or unacknowledged commit never authorizes a second submission. |
-| Return 201 | Accepted if its save completed | A lost HTTP response does not erase the operation. GET reads it; repeated POST currently returns 409. |
+| Return 201 | Accepted if its save completed | A lost HTTP response does not erase the operation. GET reads it; same-key/same-request POST replays with 200, while a changed canonical request returns 409. |
 
 No provider call precedes successful durable Submitting. Unit tests prove call
 ordering, failure/cancellation propagation and absence of automatic repost;
@@ -128,12 +129,11 @@ callback, reconciliation, inbox, outbox or audit table. Stage 2's provider
 failure simulator and ledger are test/laboratory behavior only and do not make
 the local PostgreSQL workflow durable across provider ambiguity.
 
-FL-RULE-006's full same-request recovery requirement conflicts with this stage's
-explicit deferral of replay/fingerprints. The smallest safe restriction is a
-unique key and 409 for every duplicate before provider work. This preserves
-no-duplicate safety at the expense of replay availability, and is explicitly
-not the finished idempotency contract. Never suggest changing keys after a
-timeout. Original state/request data are not overwritten on a duplicate.
+Stage 3 now implements the durable same-request replay portion of FL-RULE-006.
+The first committed fingerprint owns the key; a different fingerprint returns a
+409 conflict and cannot overwrite the stored request. Never suggest changing
+keys after a timeout. Original state/request data are not overwritten on a
+duplicate. Ambiguous `Submitting` recovery remains a Stage 4 concern.
 
 Graceful host/context recreation is tested for persistence, not claimed as
 abrupt-process-crash recovery. Readiness checks connectivity only, not schema

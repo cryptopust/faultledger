@@ -4,13 +4,19 @@ namespace FaultLedger.Application.Transfers;
 
 public sealed class TransferService(ITransferStore store, ITransferProvider provider, TimeProvider timeProvider)
 {
-    public async Task<TransferDetails> CreateAsync(CreateTransferCommand command, CancellationToken cancellationToken)
+    public async Task<TransferDetails> CreateAsync(CreateTransferCommand command, CancellationToken cancellationToken) =>
+        (await CreateWithOutcomeAsync(command, cancellationToken)).Details;
+
+    public async Task<TransferCreateOutcome> CreateWithOutcomeAsync(CreateTransferCommand command,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(command);
         Transfer transfer;
+        string requestFingerprint;
         try
         {
+            requestFingerprint = TransferRequestFingerprint.Compute(command);
             transfer = Transfer.Create(Guid.NewGuid(), command.ClientReference, command.IdempotencyKey,
                 new Money(command.Amount, command.Currency), timeProvider.GetUtcNow());
         }
@@ -19,13 +25,36 @@ public sealed class TransferService(ITransferStore store, ITransferProvider prov
             throw new TransferValidationException(exception.Message);
         }
 
-        await store.AddAsync(transfer, cancellationToken);
-        long expectedVersion = transfer.Version;
         transfer.MarkReadyToSubmit(timeProvider.GetUtcNow());
-        await store.UpdateAsync(transfer, expectedVersion, cancellationToken);
-        expectedVersion = transfer.Version;
+        TransferRegistration registration = await store.CreateOrGetAsync(transfer, requestFingerprint,
+            TransferRequestFingerprint.CurrentVersion, cancellationToken);
+        if (!registration.Created)
+        {
+            string storedFingerprint = registration.RequestFingerprint ??
+                TransferRequestFingerprint.Compute(registration.Transfer.ClientReference,
+                    registration.Transfer.Money.Amount, registration.Transfer.Money.Currency);
+            if (!string.Equals(storedFingerprint, requestFingerprint, StringComparison.Ordinal) ||
+                (registration.FingerprintVersion is not null &&
+                 registration.FingerprintVersion != TransferRequestFingerprint.CurrentVersion))
+            {
+                throw new IdempotencyConflictException();
+            }
+
+            transfer = registration.Transfer;
+            return new TransferCreateOutcome(TransferDetails.FromTransfer(transfer), true);
+        }
+
+        long expectedVersion = transfer.Version;
         transfer.BeginSubmission(timeProvider.GetUtcNow());
-        await store.UpdateAsync(transfer, expectedVersion, cancellationToken);
+        SubmissionClaimResult claim = await store.TryClaimSubmissionAsync(transfer, expectedVersion,
+            cancellationToken);
+        if (claim != SubmissionClaimResult.ClaimAcquired)
+        {
+            Transfer? current = await store.FindAsync(transfer.Id, cancellationToken);
+            return new TransferCreateOutcome(current is null
+                ? throw new TransferStorageUnavailableException()
+                : TransferDetails.FromTransfer(current), true);
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         ProviderSubmissionResult result = await provider.SubmitAsync(
@@ -38,7 +67,7 @@ public sealed class TransferService(ITransferStore store, ITransferProvider prov
         expectedVersion = transfer.Version;
         transfer.MarkAccepted(result.ProviderReference, timeProvider.GetUtcNow());
         await store.UpdateAsync(transfer, expectedVersion, cancellationToken);
-        return TransferDetails.FromTransfer(transfer);
+        return new TransferCreateOutcome(TransferDetails.FromTransfer(transfer), !registration.Created);
     }
 
     public async Task<TransferDetails?> FindAsync(Guid id, CancellationToken cancellationToken)
@@ -47,3 +76,5 @@ public sealed class TransferService(ITransferStore store, ITransferProvider prov
         return transfer is null ? null : TransferDetails.FromTransfer(transfer);
     }
 }
+
+public sealed record TransferCreateOutcome(TransferDetails Details, bool IsReplay);

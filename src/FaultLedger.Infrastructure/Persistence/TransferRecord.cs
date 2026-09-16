@@ -1,3 +1,4 @@
+using FaultLedger.Application.Transfers;
 using FaultLedger.Domain;
 
 namespace FaultLedger.Infrastructure.Persistence;
@@ -7,6 +8,8 @@ internal sealed class TransferRecord
     public Guid Id { get; set; }
     public required string ClientReference { get; set; }
     public required string IdempotencyKey { get; set; }
+    public string? RequestFingerprint { get; set; }
+    public int? FingerprintVersion { get; set; }
     public decimal Amount { get; set; }
     public required string Currency { get; set; }
     public required string State { get; set; }
@@ -20,6 +23,9 @@ internal sealed class TransferRecord
         Id = transfer.Id,
         ClientReference = transfer.ClientReference,
         IdempotencyKey = transfer.IdempotencyKey,
+        RequestFingerprint = TransferRequestFingerprint.Compute(transfer.ClientReference, transfer.Money.Amount,
+            transfer.Money.Currency),
+        FingerprintVersion = TransferRequestFingerprint.CurrentVersion,
         Amount = transfer.Money.Amount,
         Currency = transfer.Money.Currency,
         State = transfer.State.ToString(),
