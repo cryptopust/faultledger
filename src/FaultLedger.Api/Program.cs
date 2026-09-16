@@ -15,6 +15,7 @@ public sealed class Program
         builder.Services.AddTransferInfrastructure();
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddScoped<TransferService>();
+        builder.Services.AddScoped<TransferReconciliationService>();
         builder.Services.AddProblemDetails();
         builder.Services.AddExceptionHandler<ApiExceptionHandler>();
         builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);

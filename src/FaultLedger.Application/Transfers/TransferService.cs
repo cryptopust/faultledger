@@ -57,10 +57,32 @@ public sealed class TransferService(ITransferStore store, ITransferProvider prov
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        ProviderSubmissionResult result = await provider.SubmitAsync(
-            new ProviderTransferRequest(transfer.Id, transfer.ClientReference, transfer.Money), cancellationToken);
+        ProviderSubmissionResult result;
+        try
+        {
+            result = await provider.SubmitAsync(
+                new ProviderTransferRequest(transfer.Id, transfer.ClientReference, transfer.Money), cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            transfer.MarkUnknown("The provider call was cancelled after dispatch authority was acquired.",
+                timeProvider.GetUtcNow());
+            await store.UpdateAsync(transfer, transfer.Version - 1, CancellationToken.None);
+            throw;
+        }
+
         if (!result.IsConfirmedAccepted || result.ProviderReference is null)
         {
+            long submissionVersion = transfer.Version;
+            if (result.AcceptanceEvidence == ProviderAcceptanceEvidence.AcceptanceAmbiguous)
+            {
+                transfer.MarkUnknown(result.SafeMessage, timeProvider.GetUtcNow());
+                await store.UpdateAsync(transfer, submissionVersion, CancellationToken.None);
+                return new TransferCreateOutcome(TransferDetails.FromTransfer(transfer), false);
+            }
+
+            transfer.MarkFailed(result.SafeMessage, timeProvider.GetUtcNow());
+            await store.UpdateAsync(transfer, submissionVersion, CancellationToken.None);
             throw new ProviderSubmissionException(result);
         }
 

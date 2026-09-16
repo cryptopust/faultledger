@@ -45,16 +45,18 @@ public sealed class Transfer
     public static Transfer Restore(Guid id, string clientReference, string idempotencyKey, Money money,
         TransferState state, string? providerReference, DateTimeOffset createdAt, DateTimeOffset updatedAt, long version)
     {
-        long requiredVersion = state switch
+        bool validVersion = state switch
         {
-            TransferState.Created => 0,
-            TransferState.ReadyToSubmit => 1,
-            TransferState.Submitting => 2,
-            TransferState.Accepted or TransferState.Failed or TransferState.Unknown => 3,
-            TransferState.Completed or TransferState.ManualReview => 4,
+            TransferState.Created => version == 0,
+            TransferState.ReadyToSubmit => version == 1,
+            TransferState.Submitting => version == 2,
+            TransferState.Accepted or TransferState.Failed => version is 3 or 4,
+            TransferState.Unknown => version == 3,
+            TransferState.Completed => version is 4 or 5,
+            TransferState.ManualReview => version == 4,
             _ => throw new ArgumentOutOfRangeException(nameof(state))
         };
-        if (version != requiredVersion || updatedAt < createdAt ||
+        if (!validVersion || updatedAt < createdAt ||
             createdAt != CanonicalTime(createdAt) || updatedAt != CanonicalTime(updatedAt))
         {
             throw new ArgumentException("Stored transfer version or timestamps violate its state invariants.");
@@ -92,10 +94,31 @@ public sealed class Transfer
         ProviderReference = providerReference;
     }
 
+    public void ResolveAccepted(string providerReference, DateTimeOffset timestamp)
+    {
+        ValidateReference(providerReference, ReferenceMaximumLength, nameof(providerReference));
+        Transition(TransferState.Unknown, TransferState.Accepted, timestamp);
+        ProviderReference = providerReference;
+    }
+
+    public void ResolveCompleted(string providerReference, string completionEvidence, DateTimeOffset timestamp)
+    {
+        ValidateReference(providerReference, ReferenceMaximumLength, nameof(providerReference));
+        RequireEvidence(completionEvidence);
+        Transition(TransferState.Unknown, TransferState.Completed, timestamp);
+        ProviderReference = providerReference;
+    }
+
     public void MarkFailed(string rejectionEvidence, DateTimeOffset timestamp)
     {
         RequireEvidence(rejectionEvidence);
         Transition(TransferState.Submitting, TransferState.Failed, timestamp);
+    }
+
+    public void ResolveFailed(string rejectionEvidence, DateTimeOffset timestamp)
+    {
+        RequireEvidence(rejectionEvidence);
+        Transition(TransferState.Unknown, TransferState.Failed, timestamp);
     }
 
     public void MarkUnknown(string uncertaintyReason, DateTimeOffset timestamp)

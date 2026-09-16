@@ -92,6 +92,49 @@ public sealed class MockProviderFailureLaboratoryTests
 
     [Fact]
     [Trait("Category", "ProviderFailureLaboratory")]
+    public async Task Lookup_IsSideEffectFreeAndSupportsDeterministicEventualVisibility()
+    {
+        var ledger = new MockProviderLedger();
+        var provider = new SyntheticTransferProvider(ledger, MockProviderScenario.TimeoutAfterAccept,
+            new FixedTimeProvider());
+        ProviderTransferRequest request = CreateRequest();
+        await provider.SubmitAsync(request, TestContext.Current.CancellationToken);
+        ledger.ConfigureLookupSequence(TransferId, ProviderLookupResult.NotFound(),
+            ProviderLookupResult.ConfirmedAccepted("provider-visible-later"));
+
+        long submissions = ledger.SubmissionAttempts;
+        ProviderLookupResult first = await provider.LookupAsync(new ProviderLookupRequest(TransferId),
+            TestContext.Current.CancellationToken);
+        ProviderLookupResult second = await provider.LookupAsync(new ProviderLookupRequest(TransferId),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProviderLookupEvidence.NotFound, first.Evidence);
+        Assert.Equal(ProviderLookupEvidence.ConfirmedAccepted, second.Evidence);
+        Assert.Equal(2, ledger.LookupAttempts);
+        Assert.Equal(submissions, ledger.SubmissionAttempts);
+        Assert.Equal(1, ledger.AcceptedOperationCount);
+    }
+
+    [Fact]
+    [Trait("Category", "ProviderFailureLaboratory")]
+    public async Task Lookup_NotFoundForMissingCorrelation_DoesNotCreateProviderOperation()
+    {
+        var ledger = new MockProviderLedger();
+        var provider = new SyntheticTransferProvider(ledger, MockProviderScenario.Success,
+            new FixedTimeProvider());
+
+        ProviderLookupResult result = await provider.LookupAsync(
+            new ProviderLookupRequest(Guid.Parse("99999999-9999-9999-9999-999999999999")),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProviderLookupEvidence.NotFound, result.Evidence);
+        Assert.Equal(1, ledger.LookupAttempts);
+        Assert.Equal(0, ledger.SubmissionAttempts);
+        Assert.Equal(0, ledger.AcceptedOperationCount);
+    }
+
+    [Fact]
+    [Trait("Category", "ProviderFailureLaboratory")]
     public async Task SlowResponse_UsesControlledGateBeforeAcceptanceAndCompletesAfterRelease()
     {
         var ledger = new MockProviderLedger();

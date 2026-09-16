@@ -32,9 +32,14 @@ public sealed class MockProviderLedger
 {
     private readonly ConcurrentQueue<MockProviderSubmissionAttempt> submissionHistory = new();
     private readonly ConcurrentDictionary<string, MockProviderOperation> acceptedOperations = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<Guid, ConcurrentQueue<ProviderLookupResult>> lookupSequences = new();
+    private readonly ConcurrentDictionary<Guid, ProviderLookupResult> lookupFallbacks = new();
     private long submissionAttempts;
+    private long lookupAttempts;
 
     public long SubmissionAttempts => Interlocked.Read(ref submissionAttempts);
+
+    public long LookupAttempts => Interlocked.Read(ref lookupAttempts);
 
     public int AcceptedOperationCount => acceptedOperations.Count;
 
@@ -68,6 +73,48 @@ public sealed class MockProviderLedger
         }
 
         return providerReference;
+    }
+
+    internal long RecordLookupAttempt() => Interlocked.Increment(ref lookupAttempts);
+
+    public void ConfigureLookupSequence(Guid transferId, params ProviderLookupResult[] results)
+    {
+        if (transferId == Guid.Empty)
+        {
+            throw new ArgumentException("Provider lookup correlation cannot be empty.", nameof(transferId));
+        }
+
+        ArgumentNullException.ThrowIfNull(results);
+        if (results.Length == 0 || results.Any(result => result is null))
+        {
+            throw new ArgumentException("At least one deterministic lookup result is required.", nameof(results));
+        }
+
+        lookupSequences[transferId] = new ConcurrentQueue<ProviderLookupResult>(results);
+        lookupFallbacks[transferId] = results[^1];
+    }
+
+    internal ProviderLookupResult Lookup(Guid transferId)
+    {
+        RecordLookupAttempt();
+        if (lookupSequences.TryGetValue(transferId, out ConcurrentQueue<ProviderLookupResult>? sequence) &&
+            sequence.TryDequeue(out ProviderLookupResult? configured))
+        {
+            return configured;
+        }
+
+        if (lookupFallbacks.TryGetValue(transferId, out ProviderLookupResult? fallback))
+        {
+            return fallback;
+        }
+
+        MockProviderOperation? operation = acceptedOperations.Values
+            .Where(candidate => candidate.TransferId == transferId)
+            .OrderBy(candidate => candidate.SubmissionAttempt)
+            .SingleOrDefault();
+        return operation is null
+            ? ProviderLookupResult.NotFound()
+            : ProviderLookupResult.ConfirmedAccepted(operation.ProviderReference);
     }
 
     public bool TryGetAcceptedOperation(string providerReference, out MockProviderOperation? operation) =>

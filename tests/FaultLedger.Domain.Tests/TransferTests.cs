@@ -27,6 +27,9 @@ public sealed class TransferTests
             ("accept", TransferState.Submitting, TransferState.Accepted),
             ("fail", TransferState.Submitting, TransferState.Failed),
             ("unknown", TransferState.Submitting, TransferState.Unknown),
+            ("resolve-accept", TransferState.Unknown, TransferState.Accepted),
+            ("resolve-complete", TransferState.Unknown, TransferState.Completed),
+            ("resolve-fail", TransferState.Unknown, TransferState.Failed),
             ("complete", TransferState.Accepted, TransferState.Completed),
             ("review", TransferState.Unknown, TransferState.ManualReview)
         ];
@@ -54,10 +57,12 @@ public sealed class TransferTests
             Assert.Equal(version + 1, transfer.Version);
             Assert.Equal(Timestamp.AddMinutes(1), transfer.UpdatedAt);
             Assert.Equal(Timestamp, transfer.CreatedAt);
-            if (operation == "accept")
+            if (operation is "accept" or "resolve-accept" or "resolve-complete")
             {
                 Assert.Equal("synthetic-reference", transfer.ProviderReference);
-                Assert.False(transfer.IsTerminal);
+                Assert.Equal(operation is "resolve-complete" ? TransferState.Completed : TransferState.Accepted,
+                    transfer.State);
+                Assert.Equal(operation is "resolve-complete", transfer.IsTerminal);
             }
         }
         else
@@ -139,6 +144,21 @@ public sealed class TransferTests
         Assert.Throws<ArgumentException>(() => Restore(TransferState.Created, 0, "unexpected", Timestamp));
         Assert.Throws<ArgumentException>(() => Restore(TransferState.Created, 0, null, Timestamp.AddTicks(1)));
         Assert.Throws<ArgumentException>(() => Restore(TransferState.Created, 0, null, Timestamp.AddMinutes(-1)));
+        Assert.Throws<ArgumentException>(() => Restore(TransferState.Unknown, 4, null, Timestamp));
+        Assert.Equal(TransferState.Accepted,
+            Restore(TransferState.Accepted, 4, "synthetic-reference", Timestamp).State);
+        Assert.Equal(TransferState.Completed,
+            Restore(TransferState.Completed, 5, "synthetic-reference", Timestamp).State);
+        Assert.Equal(TransferState.Failed, Restore(TransferState.Failed, 4, null, Timestamp).State);
+    }
+
+    [Fact]
+    public void ReconciledAccepted_CanCompleteWithNextDurableVersion()
+    {
+        Transfer transfer = Restore(TransferState.Accepted, 4, "synthetic-reference", Timestamp);
+        transfer.MarkCompleted("provider-completed", Timestamp);
+        Assert.Equal(TransferState.Completed, transfer.State);
+        Assert.Equal(5, transfer.Version);
     }
 
     private static Transfer Restore(TransferState state, long version, string? reference, DateTimeOffset updatedAt) =>
@@ -198,6 +218,9 @@ public sealed class TransferTests
             case "accept": transfer.MarkAccepted("synthetic-reference", timestamp); break;
             case "fail": transfer.MarkFailed("confirmed-rejected", timestamp); break;
             case "unknown": transfer.MarkUnknown("outcome-unconfirmed", timestamp); break;
+            case "resolve-accept": transfer.ResolveAccepted("synthetic-reference", timestamp); break;
+            case "resolve-complete": transfer.ResolveCompleted("synthetic-reference", "confirmed-completed", timestamp); break;
+            case "resolve-fail": transfer.ResolveFailed("confirmed-rejected", timestamp); break;
             case "complete": transfer.MarkCompleted("confirmed-completed", timestamp); break;
             case "review": transfer.SendToManualReview("review-required", timestamp); break;
             default: throw new ArgumentOutOfRangeException(nameof(operation));

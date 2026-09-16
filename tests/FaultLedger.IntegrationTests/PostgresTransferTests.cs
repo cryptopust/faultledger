@@ -109,7 +109,7 @@ public sealed class PostgresTransferTests(PostgresFixture fixture) : IClassFixtu
     }
 
     [Fact]
-    public async Task TimeoutAfterAcceptance_ReplayDoesNotPostAgain()
+    public async Task TimeoutAfterAcceptance_ReplayAndReconcileDoNotPostAgain()
     {
         string connectionString = await CreateDatabaseAsync();
         var ledger = new MockProviderLedger();
@@ -117,15 +117,159 @@ public sealed class PostgresTransferTests(PostgresFixture fixture) : IClassFixtu
         using HttpClient client = factory.CreateClient();
         using HttpResponseMessage first = await client.PostAsJsonAsync("/api/transfers", Request(),
             TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.BadGateway, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
+        TransferResponse? firstBody = await first.Content.ReadFromJsonAsync<TransferResponse>(
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(firstBody);
+        Assert.Equal("Unknown", firstBody.State);
+        Assert.False(firstBody.IsFinal);
+        Assert.Equal(nameof(RetryAdvice.DoNotRepost), firstBody.RetryAdvice);
         using HttpResponseMessage replay = await client.PostAsJsonAsync("/api/transfers", Request(),
             TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
         TransferResponse? body = await replay.Content.ReadFromJsonAsync<TransferResponse>(
             TestContext.Current.CancellationToken);
         Assert.NotNull(body);
-        Assert.Equal("Submitting", body.State);
+        Assert.Equal("Unknown", body.State);
+        Assert.Equal(nameof(RetryAdvice.DoNotRepost), body.RetryAdvice);
+        using HttpResponseMessage reconciliation = await client.PostAsync($"/api/transfers/{body.Id:D}/reconcile",
+            content: null, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, reconciliation.StatusCode);
+        ReconciliationResponse? reconciled = await reconciliation.Content.ReadFromJsonAsync<ReconciliationResponse>(
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(reconciled);
+        Assert.Equal(nameof(ReconciliationOutcome.ResolvedAccepted), reconciled.Outcome);
+        Assert.Equal("Accepted", reconciled.Transfer.State);
         Assert.Equal(1L, await TransferCountAsync(connectionString));
+        Assert.Equal(1, ledger.SubmissionAttempts);
+        Assert.Equal(1, ledger.AcceptedOperationCount);
+    }
+
+    [Theory]
+    [InlineData(MockProviderScenario.ConnectionLostAfterAccept)]
+    [InlineData(MockProviderScenario.Provider500AfterAccept)]
+    [InlineData(MockProviderScenario.MalformedResponseAfterAccept)]
+    public async Task AmbiguousProviderOutcome_ReconcileFindsOriginalByTransferIdWithoutRepost(
+        MockProviderScenario scenario)
+    {
+        string connectionString = await CreateDatabaseAsync();
+        var ledger = new MockProviderLedger();
+        await using var factory = CreateFactory(connectionString, ledger, scenario);
+        using HttpClient client = factory.CreateClient();
+
+        using HttpResponseMessage first = await client.PostAsJsonAsync("/api/transfers", Request(),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
+        TransferResponse created = Assert.IsType<TransferResponse>(await first.Content.ReadFromJsonAsync<TransferResponse>(
+            TestContext.Current.CancellationToken));
+        Assert.Equal("Unknown", created.State);
+        Assert.Equal(1, ledger.SubmissionAttempts);
+        Assert.Equal(1, ledger.AcceptedOperationCount);
+
+        using HttpResponseMessage reconcile = await client.PostAsync($"/api/transfers/{created.Id:D}/reconcile",
+            content: null, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, reconcile.StatusCode);
+        ReconciliationResponse resolved = Assert.IsType<ReconciliationResponse>(
+            await reconcile.Content.ReadFromJsonAsync<ReconciliationResponse>(TestContext.Current.CancellationToken));
+        Assert.Equal(nameof(ReconciliationOutcome.ResolvedAccepted), resolved.Outcome);
+        Assert.Equal("Accepted", resolved.Transfer.State);
+        Assert.Equal(1, ledger.SubmissionAttempts);
+        Assert.Equal(1, ledger.AcceptedOperationCount);
+    }
+
+    [Fact]
+    public async Task Unknown_NotFoundThenAccepted_RemainsUnknownBeforeLaterEvidenceWithoutRepost()
+    {
+        string connectionString = await CreateDatabaseAsync();
+        var ledger = new MockProviderLedger();
+        await using var factory = CreateFactory(connectionString, ledger, MockProviderScenario.TimeoutAfterAccept);
+        using HttpClient client = factory.CreateClient();
+
+        using HttpResponseMessage first = await client.PostAsJsonAsync("/api/transfers", Request(),
+            TestContext.Current.CancellationToken);
+        TransferResponse created = Assert.IsType<TransferResponse>(await first.Content.ReadFromJsonAsync<TransferResponse>(
+            TestContext.Current.CancellationToken));
+        ledger.ConfigureLookupSequence(created.Id, ProviderLookupResult.NotFound(),
+            ProviderLookupResult.ConfirmedAccepted("visible-after-lag"));
+
+        using HttpResponseMessage notFound = await client.PostAsync($"/api/transfers/{created.Id:D}/reconcile",
+            content: null, TestContext.Current.CancellationToken);
+        ReconciliationResponse firstReconciliation = Assert.IsType<ReconciliationResponse>(
+            await notFound.Content.ReadFromJsonAsync<ReconciliationResponse>(TestContext.Current.CancellationToken));
+        Assert.Equal(nameof(ReconciliationOutcome.NotFound), firstReconciliation.Outcome);
+        Assert.Equal("Unknown", firstReconciliation.Transfer.State);
+        Assert.Equal(nameof(RetryAdvice.DoNotRepost), firstReconciliation.Transfer.RetryAdvice);
+
+        using HttpResponseMessage accepted = await client.PostAsync($"/api/transfers/{created.Id:D}/reconcile",
+            content: null, TestContext.Current.CancellationToken);
+        ReconciliationResponse secondReconciliation = Assert.IsType<ReconciliationResponse>(
+            await accepted.Content.ReadFromJsonAsync<ReconciliationResponse>(TestContext.Current.CancellationToken));
+        Assert.Equal(nameof(ReconciliationOutcome.ResolvedAccepted), secondReconciliation.Outcome);
+        Assert.Equal("Accepted", secondReconciliation.Transfer.State);
+        Assert.Equal(1, ledger.SubmissionAttempts);
+        Assert.Equal(1, ledger.AcceptedOperationCount);
+    }
+
+    [Fact]
+    public async Task Unknown_ReconciliationSurvivesFreshApplicationHostWithoutResubmission()
+    {
+        string connectionString = await CreateDatabaseAsync();
+        var ledger = new MockProviderLedger();
+        TransferResponse created;
+        await using (var first = CreateFactory(connectionString, ledger, MockProviderScenario.TimeoutAfterAccept))
+        {
+            using HttpClient client = first.CreateClient();
+            using HttpResponseMessage response = await client.PostAsJsonAsync("/api/transfers", Request(),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+            created = Assert.IsType<TransferResponse>(await response.Content.ReadFromJsonAsync<TransferResponse>(
+                TestContext.Current.CancellationToken));
+        }
+
+        await using (var restarted = CreateFactory(connectionString, ledger, MockProviderScenario.Success))
+        {
+            using HttpClient client = restarted.CreateClient();
+            using HttpResponseMessage reconcile = await client.PostAsync($"/api/transfers/{created.Id:D}/reconcile",
+                content: null, TestContext.Current.CancellationToken);
+            ReconciliationResponse resolved = Assert.IsType<ReconciliationResponse>(
+                await reconcile.Content.ReadFromJsonAsync<ReconciliationResponse>(TestContext.Current.CancellationToken));
+            Assert.Equal(nameof(ReconciliationOutcome.ResolvedAccepted), resolved.Outcome);
+            Assert.Equal("Accepted", resolved.Transfer.State);
+        }
+
+        Assert.Equal(1, ledger.SubmissionAttempts);
+        Assert.Equal(1, ledger.AcceptedOperationCount);
+    }
+
+    [Fact]
+    public async Task ConcurrentReconciliation_OneDurableResolutionAndNoProviderRepost()
+    {
+        string connectionString = await CreateDatabaseAsync();
+        var ledger = new MockProviderLedger();
+        await using var factory = CreateFactory(connectionString, ledger, MockProviderScenario.TimeoutAfterAccept);
+        using HttpClient client = factory.CreateClient();
+        using HttpResponseMessage submitted = await client.PostAsJsonAsync("/api/transfers", Request(),
+            TestContext.Current.CancellationToken);
+        TransferResponse created = Assert.IsType<TransferResponse>(await submitted.Content.ReadFromJsonAsync<TransferResponse>(
+            TestContext.Current.CancellationToken));
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<ReconciliationResponse?>[] reconciliations = Enumerable.Range(0, 20).Select(async _ =>
+        {
+            await start.Task;
+            using HttpResponseMessage response = await client.PostAsync($"/api/transfers/{created.Id:D}/reconcile",
+                content: null, TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            return await response.Content.ReadFromJsonAsync<ReconciliationResponse>(
+                TestContext.Current.CancellationToken);
+        }).ToArray();
+
+        start.SetResult();
+        ReconciliationResponse?[] results = await Task.WhenAll(reconciliations);
+        Assert.All(results, result =>
+        {
+            Assert.NotNull(result);
+            Assert.Equal("Accepted", result.Transfer.State);
+        });
         Assert.Equal(1, ledger.SubmissionAttempts);
         Assert.Equal(1, ledger.AcceptedOperationCount);
     }
@@ -238,8 +382,8 @@ public sealed class PostgresTransferTests(PostgresFixture fixture) : IClassFixtu
         Assert.Contains("UNIQUE", Assert.IsType<string>(await index.ExecuteScalarAsync(TestContext.Current.CancellationToken)), StringComparison.Ordinal);
         await using var database = OpenContext(connectionString);
         string[] migrations = (await database.Database.GetAppliedMigrationsAsync(TestContext.Current.CancellationToken)).ToArray();
-        Assert.Equal(2, migrations.Length);
-        Assert.EndsWith("_DurableIdempotencyAndSubmissionClaim", migrations[^1], StringComparison.Ordinal);
+        Assert.Equal(3, migrations.Length);
+        Assert.EndsWith("_UnknownOutcomeReconciliation", migrations[^1], StringComparison.Ordinal);
     }
 
     [Theory]

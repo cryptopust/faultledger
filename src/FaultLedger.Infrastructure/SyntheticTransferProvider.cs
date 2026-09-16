@@ -6,7 +6,7 @@ public sealed class SyntheticTransferProvider(
     MockProviderLedger ledger,
     MockProviderScenario scenario,
     TimeProvider timeProvider,
-    MockProviderSlowResponseGate? slowResponseGate = null) : ITransferProvider
+    MockProviderSlowResponseGate? slowResponseGate = null) : ITransferProvider, ITransferLookup
 {
     private readonly MockProviderScenarioDefinition definition = MockProviderScenarioCatalog.Get(scenario);
 
@@ -43,5 +43,14 @@ public sealed class SyntheticTransferProvider(
         return definition.AcceptanceEvidence == ProviderAcceptanceEvidence.ConfirmedAccepted
             ? ProviderSubmissionResult.ConfirmedAccepted(providerReference)
             : ProviderSubmissionResult.AcceptanceAmbiguous(definition.FailureKind, definition.SafeMessage);
+    }
+
+    public Task<ProviderLookupResult> LookupAsync(ProviderLookupRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(ledger);
+        return Task.FromResult(ledger.Lookup(request.TransferId));
     }
 }

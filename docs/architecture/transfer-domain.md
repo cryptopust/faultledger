@@ -49,12 +49,19 @@ stateDiagram-v2
     Submitting --> Unknown
     Accepted --> Completed
     Unknown --> ManualReview
+    Unknown --> Accepted
+    Unknown --> Completed
+    Unknown --> Failed
 ```
 
-Completed and Failed are terminal in Stage 1. Accepted is not final completion.
-Unknown and ManualReview remain unresolved/nonterminal concepts; only the shown
-edges exist today. Illegal transitions and replayed transitions throw explicitly
-without mutation. No silent terminal regression or transition retry is provided.
+Completed and Failed are terminal. Accepted is not final completion. Unknown is
+an explicit non-final epistemic state: the provider may have accepted the
+operation but FaultLedger lacks sufficient evidence to classify it. It exposes
+`DoNotRepost` and cannot return to `ReadyToSubmit` or `Submitting`. Only an
+explicit provider lookup can authorize the shown Unknown resolution edges;
+`NotFound` and `StillUnknown` preserve Unknown. Illegal transitions and replayed
+transitions throw explicitly without mutation. No silent terminal regression or
+transition retry is provided.
 
 Acceptance requires a nonempty validated provider reference. Failure, uncertainty,
 completion and manual-review methods require explicit evidence/reason text. This
@@ -66,9 +73,11 @@ TimeProvider is read in Application, never hidden inside Domain. Supplied domain
 timestamps are normalized to UTC and truncated to microseconds. Transitions
 reject backward time, permit equal timestamps, and increment Version exactly
 once. The timestamp zero/infinity sentinel is rejected. The present graph has
-versions 0 (Created), 1 (ReadyToSubmit), 2 (Submitting), 3 (Accepted/Failed/Unknown)
-and 4 (Completed/ManualReview). Changing the graph requires reviewing the stored
-version/state constraint, not silently introducing incompatible state strings.
+versions 0 (Created), 1 (ReadyToSubmit), 2 (Submitting), 3 (normal
+Accepted/Failed/Unknown), 4 (reconciled Accepted/Failed, direct Completed, or
+ManualReview), and 5 (Completed after a reconciled Accepted). Changing the graph
+requires reviewing the stored version/state constraint, not silently introducing
+incompatible state strings.
 
 ## Persistence and concurrency
 
@@ -122,18 +131,24 @@ blocked wherever Docker is absent.
 ## Deliberately incomplete guarantees
 
 A process crash after provider acceptance but before local Accepted persistence
-cannot yet be reconciled safely. Durable Submitting must be interpreted as
-possibly attempted/ambiguous, never as ordinary failure or permission to send.
-There is no automatic dispatcher, repost, recovery worker, Unknown detection,
-callback, reconciliation, inbox, outbox or audit table. Stage 2's provider
-failure simulator and ledger are test/laboratory behavior only and do not make
-the local PostgreSQL workflow durable across provider ambiguity.
+cannot yet be classified from a durable `Submitting` row alone. Durable
+Submitting must be interpreted as possibly attempted/ambiguous, never as
+ordinary failure or permission to send. Stage 4 classifies explicit ambiguous
+provider results as Unknown and offers explicit provider lookup reconciliation;
+it does not reset a crash-stuck Submitting row. There is no automatic
+dispatcher, repost, recovery worker, callback, inbox, outbox or audit table.
+Stage 2's provider failure simulator and ledger are test/laboratory behavior
+only and do not make the local PostgreSQL workflow durable across provider
+ambiguity.
 
-Stage 3 now implements the durable same-request replay portion of FL-RULE-006.
+Stages 3 and 4 now implement durable same-request replay and safe ambiguous
+outcome reconciliation under FL-RULE-006 and FL-RULE-003.
 The first committed fingerprint owns the key; a different fingerprint returns a
 409 conflict and cannot overwrite the stored request. Never suggest changing
 keys after a timeout. Original state/request data are not overwritten on a
-duplicate. Ambiguous `Submitting` recovery remains a Stage 4 concern.
+duplicate. Explicit ambiguous provider responses are now reconciled in Stage 4;
+crash-stuck `Submitting` recovery remains conservative until dispatch evidence
+can be established.
 
 Graceful host/context recreation is tested for persistence, not claimed as
 abrupt-process-crash recovery. Readiness checks connectivity only, not schema

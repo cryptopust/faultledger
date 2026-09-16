@@ -18,6 +18,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ITransferProvider>(provider => new SyntheticTransferProvider(
             provider.GetRequiredService<MockProviderLedger>(), MockProviderScenario.Success,
             provider.GetRequiredService<TimeProvider>()));
+        services.AddScoped<ITransferLookup>(provider => new SyntheticTransferProvider(
+            provider.GetRequiredService<MockProviderLedger>(), MockProviderScenario.Success,
+            provider.GetRequiredService<TimeProvider>()));
         return services;
     }
 

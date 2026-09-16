@@ -4,7 +4,7 @@ A deterministic .NET engineering failure laboratory for studying distributed
 financial-style orchestration. It is not a payment processor, bank, wallet,
 real-money service, or compliance-certified platform. Synthetic data only.
 
-## Current stage: durable idempotency and high-contention concurrency (3)
+## Current stage: UNKNOWN outcomes and safe reconciliation (4)
 
 The existing governance, nine-project .NET 10 solution, health endpoints,
 PostgreSQL development Compose configuration, Dockerfile and CI are retained.
@@ -26,15 +26,19 @@ The [bootstrap record](docs/runbooks/bootstrap-validation.md) is historical.
 Stage 3 adds versioned SHA-256 request fingerprints, PostgreSQL uniqueness-race
 recovery, same-request replay, explicit same-key/different-request conflicts,
 and a durable `ReadyToSubmit` to `Submitting` claim committed before provider
-I/O. Replays are resolved from PostgreSQL and do not invoke the provider again;
-the fake provider's `SubmissionAttempts` counter remains the external-call
-evidence. The provider ledger is still fake external truth only, not a
-FaultLedger idempotency mechanism.
+I/O. Stage 4 maps ambiguous post-dispatch outcomes to explicit `Unknown`,
+exposes `DoNotRepost`, and reconciles only through an explicit provider lookup
+correlated by durable `TransferId`. Replays and reconciliation never invoke
+`SubmitAsync` again; the fake provider's `SubmissionAttempts` counter remains
+the external-call evidence. The provider ledger is still fake external truth
+only, not a FaultLedger idempotency mechanism.
 
-**Not implemented:** automatic Unknown detection, reconciliation, callbacks,
-inbox/outbox, audit history, background workers, Redis, Toxiproxy or business
-telemetry. No automatic retry or repost exists. A crash after durable
-`Submitting` remains an unresolved recovery boundary for Stage 4.
+**Not implemented:** callbacks, durable callback inbox, outbox, audit history,
+background reconciliation workers, Redis, Toxiproxy or business telemetry. No
+automatic retry or repost exists. A crash after durable `Submitting` and before
+FaultLedger classifies the provider result remains a conservative unresolved
+recovery boundary; Stage 4 does not reset it based on elapsed time or a single
+`NotFound` lookup.
 Full Definition of Done is not satisfied while PostgreSQL evidence is blocked.
 
 ## Prerequisites
@@ -109,8 +113,14 @@ not official currency status. References use ASCII letters, digits, `.`, `_`,
 Successful POST returns `201`, a Location, and an explicit response in `Accepted`
 state, not `Completed`. `GET /api/transfers/{id}` reads local durable state;
 missing identities produce a typed 404. Validation returns 400, duplicate keys
-and concurrency conflicts 409, and classified persistence outages 503. No entity
-or stack trace is returned. Keys are globally scoped and case-sensitive.
+and concurrency conflicts 409, and classified persistence outages 503. An
+ambiguous provider response returns `202` with `state=Unknown`, `isFinal=false`,
+and `retryAdvice=DoNotRepost`; replaying the same key returns HTTP `200` for the
+same transfer without resubmission. `POST /api/transfers/{id}/reconcile` performs
+one explicit provider lookup and resolves only from confirmed evidence.
+`NotFound`, `StillUnknown`, and lookup transport failure preserve Unknown and
+never authorize repost. No entity or stack trace is returned. Keys are globally
+scoped and case-sensitive.
 
 Do not automatically repost or replace a key after an error. A crash after
 durable Submitting may leave a possibly accepted operation without local

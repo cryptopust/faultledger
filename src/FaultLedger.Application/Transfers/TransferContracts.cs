@@ -27,11 +27,28 @@ public static class TransferRequestFingerprint
 }
 
 public sealed record TransferDetails(Guid Id, string ClientReference, string IdempotencyKey, decimal Amount,
-    string Currency, string State, string? ProviderReference, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, long Version)
+    string Currency, string State, string? ProviderReference, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt,
+    long Version, bool IsFinal, RetryAdvice RetryAdvice, string? OutcomeMessage)
 {
     public static TransferDetails FromTransfer(Transfer transfer) => new(transfer.Id, transfer.ClientReference,
         transfer.IdempotencyKey, transfer.Money.Amount, transfer.Money.Currency, transfer.State.ToString(),
-        transfer.ProviderReference, transfer.CreatedAt, transfer.UpdatedAt, transfer.Version);
+        transfer.ProviderReference, transfer.CreatedAt, transfer.UpdatedAt, transfer.Version, transfer.IsTerminal,
+        transfer.State is TransferState.Submitting or TransferState.Unknown or TransferState.ManualReview
+            ? RetryAdvice.DoNotRepost
+            : RetryAdvice.None,
+        transfer.State switch
+        {
+            TransferState.Submitting => "Provider dispatch is unresolved; reconciliation is required.",
+            TransferState.Unknown => "Provider outcome is unresolved; reconciliation is required.",
+            TransferState.ManualReview => "Manual review is required; do not repost the operation.",
+            _ => null
+        });
+}
+
+public enum RetryAdvice
+{
+    None,
+    DoNotRepost
 }
 
 public interface ITransferStore
@@ -56,6 +73,24 @@ public enum SubmissionClaimResult
 }
 
 public class IdempotencyConflictException() : InvalidOperationException("The idempotency key belongs to a different canonical request.");
+
+public sealed class ReconciliationUnavailableException(string message) : InvalidOperationException(message);
+
+public sealed class ReconciliationNotEligibleException() : InvalidOperationException("Only an Unknown transfer can be reconciled.");
+
+public enum ReconciliationOutcome
+{
+    ResolvedAccepted,
+    ResolvedCompleted,
+    ResolvedRejected,
+    NotFound,
+    StillUnknown,
+    LookupUnavailable,
+    AlreadyResolved,
+    NotEligible
+}
+
+public sealed record ReconciliationDetails(TransferDetails Transfer, ReconciliationOutcome Outcome, string Message);
 
 public sealed class DuplicateTransferKeyException() : IdempotencyConflictException();
 

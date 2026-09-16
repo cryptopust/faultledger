@@ -18,7 +18,7 @@ public sealed class FaultLedgerDbContext(DbContextOptions<FaultLedgerDbContext> 
             table.HasCheckConstraint("ck_transfers_client_reference", "client_reference COLLATE \"C\" ~ '^[A-Za-z0-9_.:-]{1,100}$'");
             table.HasCheckConstraint("ck_transfers_idempotency_key", "idempotency_key COLLATE \"C\" ~ '^[A-Za-z0-9_.:-]{1,128}$'");
             table.HasCheckConstraint("ck_transfers_request_fingerprint", "(request_fingerprint IS NULL AND fingerprint_version IS NULL) OR (request_fingerprint COLLATE \"C\" ~ '^[0-9a-f]{64}$' AND fingerprint_version = 1)");
-            table.HasCheckConstraint("ck_transfers_state_version", "(state = 'Created' AND version = 0) OR (state = 'ReadyToSubmit' AND version = 1) OR (state = 'Submitting' AND version = 2) OR (state IN ('Accepted', 'Failed', 'Unknown') AND version = 3) OR (state IN ('Completed', 'ManualReview') AND version = 4)");
+            table.HasCheckConstraint("ck_transfers_state_version", "(state = 'Created' AND version = 0) OR (state = 'ReadyToSubmit' AND version = 1) OR (state = 'Submitting' AND version = 2) OR (state IN ('Accepted', 'Failed') AND version IN (3, 4)) OR (state = 'Unknown' AND version = 3) OR (state = 'Completed' AND version IN (4, 5)) OR (state = 'ManualReview' AND version = 4)");
             table.HasCheckConstraint("ck_transfers_provider_reference", "(state IN ('Accepted', 'Completed') AND provider_reference IS NOT NULL AND provider_reference COLLATE \"C\" ~ '^[A-Za-z0-9_.:-]{1,100}$') OR (state NOT IN ('Accepted', 'Completed') AND provider_reference IS NULL)");
             table.HasCheckConstraint("ck_transfers_timestamps", "updated_at >= created_at AND isfinite(created_at) AND isfinite(updated_at)");
         });

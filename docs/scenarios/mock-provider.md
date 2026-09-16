@@ -119,7 +119,10 @@ proves that no wall-clock delay is used. The concurrent stress test releases
 references and ordered attempt history. These tests protect the fake provider's
 thread safety; they do not prove FaultLedger's durable idempotency.
 
-Application orchestration converts any non-confirmed result into a typed
-`ProviderSubmissionException` and leaves the existing durable `Submitting`
-state unchanged. It intentionally does not map ambiguity to `Unknown`, add
-reconciliation, or retry a submission in this stage.
+Application orchestration maps confirmed rejection and laboratory-proven
+definite non-acceptance to `Failed`; ambiguous evidence becomes durable
+`Unknown` with `DoNotRepost`. The same `TransferId` correlation is queryable
+through the separate side-effect-free lookup boundary, even when the original
+provider reference was not returned to the caller. Lookup `NotFound` preserves
+Unknown rather than authorizing repost. `LookupAttempts` is tracked separately
+from `SubmissionAttempts`.

@@ -12,10 +12,11 @@ public static class TransferEndpoints
     {
         endpoints.MapPost("/api/transfers", CreateAsync);
         endpoints.MapGet("/api/transfers/{id:guid}", FindAsync);
+        endpoints.MapPost("/api/transfers/{id:guid}/reconcile", ReconcileAsync);
         return endpoints;
     }
 
-    private static async Task<Results<Created<TransferResponse>, Ok<TransferResponse>>> CreateAsync(
+    private static async Task<IResult> CreateAsync(
         CreateTransferRequest request, HttpRequest httpRequest, TransferService service,
         CancellationToken cancellationToken)
     {
@@ -46,6 +47,13 @@ public static class TransferEndpoints
             new CreateTransferCommand(request.ClientReference, idempotencyKey, amount, request.Currency),
             cancellationToken);
         TransferResponse response = TransferResponse.FromDetails(outcome.Details);
+        if (outcome.Details.State == nameof(TransferState.Unknown))
+        {
+            return outcome.IsReplay
+                ? TypedResults.Ok(response)
+                : TypedResults.Accepted($"/api/transfers/{response.Id:D}", response);
+        }
+
         return outcome.IsReplay
             ? TypedResults.Ok(response)
             : TypedResults.Created($"/api/transfers/{response.Id:D}", response);
@@ -59,14 +67,39 @@ public static class TransferEndpoints
             ? TypedResults.NotFound(new ProblemDetails { Status = 404, Title = "Transfer not found" })
             : TypedResults.Ok(TransferResponse.FromDetails(transfer));
     }
+
+    private static async Task<IResult> ReconcileAsync(Guid id, TransferReconciliationService service,
+        CancellationToken cancellationToken)
+    {
+        ReconciliationDetails details = await service.ReconcileAsync(id, cancellationToken);
+        ReconciliationResponse response = ReconciliationResponse.FromDetails(details);
+        return details.Outcome switch
+        {
+            ReconciliationOutcome.NotEligible => TypedResults.Conflict(new ProblemDetails
+            {
+                Status = StatusCodes.Status409Conflict,
+                Title = "Transfer is not eligible for reconciliation",
+                Detail = details.Message
+            }),
+            _ => TypedResults.Ok(response)
+        };
+    }
 }
 
 public sealed record CreateTransferRequest(string ClientReference, string? IdempotencyKey, JsonElement Amount, string Currency);
 
 public sealed record TransferResponse(Guid Id, string ClientReference, string IdempotencyKey, decimal Amount,
-    string Currency, string State, string? ProviderReference, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, long Version)
+    string Currency, string State, string? ProviderReference, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt,
+    long Version, bool IsFinal, string RetryAdvice, string? Message)
 {
     public static TransferResponse FromDetails(TransferDetails details) => new(details.Id, details.ClientReference,
         details.IdempotencyKey, details.Amount, details.Currency, details.State, details.ProviderReference,
-        details.CreatedAt, details.UpdatedAt, details.Version);
+        details.CreatedAt, details.UpdatedAt, details.Version, details.IsFinal, details.RetryAdvice.ToString(),
+        details.OutcomeMessage);
+}
+
+public sealed record ReconciliationResponse(TransferResponse Transfer, string Outcome, string Message)
+{
+    public static ReconciliationResponse FromDetails(ReconciliationDetails details) =>
+        new(TransferResponse.FromDetails(details.Transfer), details.Outcome.ToString(), details.Message);
 }

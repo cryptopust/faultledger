@@ -86,7 +86,7 @@ public sealed class TransferServiceTests
     }
 
     [Fact]
-    public async Task CancellationDuringProvider_LeavesSubmittingAndNeverRecordsFailedOrRetries()
+    public async Task CancellationDuringProvider_PersistsUnknownAndNeverRecordsFailedOrRetries()
     {
         using var cancellation = new CancellationTokenSource();
         var store = new RecordingStore();
@@ -100,7 +100,7 @@ public sealed class TransferServiceTests
         OperationCanceledException failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             service.CreateAsync(ValidCommand, cancellation.Token));
         Assert.Equal(cancellation.Token, failure.CancellationToken);
-        Assert.Equal("Submitting", store.Saved[^1].State);
+        Assert.Equal("Unknown", store.Saved[^1].State);
         Assert.Equal(1, provider.Calls);
     }
 
@@ -131,7 +131,7 @@ public sealed class TransferServiceTests
     [InlineData(ProviderAcceptanceEvidence.ConfirmedRejected, ProviderFailureKind.Rejected)]
     [InlineData(ProviderAcceptanceEvidence.DefinitelyNotAccepted, ProviderFailureKind.Timeout)]
     [InlineData(ProviderAcceptanceEvidence.AcceptanceAmbiguous, ProviderFailureKind.ServerError)]
-    public async Task NonAcceptedProviderEvidence_BubblesTypedEvidenceAndLeavesSubmitting(
+    public async Task NonAcceptedProviderEvidence_MapsKnownAndAmbiguousEvidenceToSafeStates(
         ProviderAcceptanceEvidence evidence, ProviderFailureKind failureKind)
     {
         var store = new RecordingStore();
@@ -139,12 +139,22 @@ public sealed class TransferServiceTests
             evidence, null, failureKind, "synthetic provider outcome")));
         var service = new TransferService(store, provider, new FixedTimeProvider());
 
-        ProviderSubmissionException exception = await Assert.ThrowsAsync<ProviderSubmissionException>(() =>
-            service.CreateAsync(ValidCommand, TestContext.Current.CancellationToken));
-
-        Assert.Equal(evidence, exception.Result.AcceptanceEvidence);
-        Assert.Equal(failureKind, exception.Result.FailureKind);
-        Assert.Equal("Submitting", store.Saved[^1].State);
+        if (evidence == ProviderAcceptanceEvidence.AcceptanceAmbiguous)
+        {
+            TransferDetails details = await service.CreateAsync(ValidCommand, TestContext.Current.CancellationToken);
+            Assert.Equal("Unknown", details.State);
+            Assert.False(details.IsFinal);
+            Assert.Equal(RetryAdvice.DoNotRepost, details.RetryAdvice);
+        }
+        else
+        {
+            ProviderSubmissionException exception = await Assert.ThrowsAsync<ProviderSubmissionException>(() =>
+                service.CreateAsync(ValidCommand, TestContext.Current.CancellationToken));
+            Assert.Equal(evidence, exception.Result.AcceptanceEvidence);
+            Assert.Equal(failureKind, exception.Result.FailureKind);
+            Assert.Equal("Failed", store.Saved[^1].State);
+            Assert.True(store.Saved[^1].IsFinal);
+        }
         Assert.Equal(1, provider.Calls);
         Assert.DoesNotContain(store.Saved, item => item.State == "Accepted");
     }
@@ -177,6 +187,30 @@ public sealed class TransferServiceTests
         Assert.True(result.IsReplay);
         Assert.Equal(existing.Id, result.Details.Id);
         Assert.Equal("Submitting", result.Details.State);
+        Assert.Equal(0, provider.Calls);
+    }
+
+    [Fact]
+    public async Task ExistingUnknownRequest_ReplaysDoNotRepostWithoutSubmission()
+    {
+        var existing = Transfer.Create(Guid.Parse("44444444-4444-4444-4444-444444444444"),
+            ValidCommand.ClientReference, ValidCommand.IdempotencyKey,
+            new Money(ValidCommand.Amount, ValidCommand.Currency), Timestamp);
+        existing.MarkReadyToSubmit(Timestamp);
+        existing.BeginSubmission(Timestamp);
+        existing.MarkUnknown("response-lost-after-accept", Timestamp);
+        var store = new RecordingStore { Existing = existing };
+        var provider = new RecordingProvider();
+        var service = new TransferService(store, provider, new FixedTimeProvider());
+
+        TransferCreateOutcome result = await service.CreateWithOutcomeAsync(ValidCommand,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsReplay);
+        Assert.Equal(existing.Id, result.Details.Id);
+        Assert.Equal("Unknown", result.Details.State);
+        Assert.False(result.Details.IsFinal);
+        Assert.Equal(RetryAdvice.DoNotRepost, result.Details.RetryAdvice);
         Assert.Equal(0, provider.Calls);
     }
 
