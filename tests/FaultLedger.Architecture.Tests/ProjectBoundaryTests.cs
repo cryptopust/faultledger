@@ -29,6 +29,21 @@ public sealed class ProjectBoundaryTests
                 Assert.Equal("Microsoft.NETCore.App", item.GetProperty("Identity").GetString()));
         }
 
+        string[] packages = items.GetProperty("PackageReference").EnumerateArray()
+            .Select(item => item.GetProperty("Identity").GetString() ?? string.Empty).ToArray();
+        if (projectName == "Infrastructure")
+        {
+            Assert.Contains("Npgsql.EntityFrameworkCore.PostgreSQL", packages);
+            Assert.Contains("Microsoft.EntityFrameworkCore", packages);
+            Assert.Contains("Microsoft.EntityFrameworkCore.Relational", packages);
+            Assert.Contains("Microsoft.EntityFrameworkCore.Design", packages);
+        }
+        else
+        {
+            Assert.DoesNotContain(packages, package => package.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.Ordinal)
+                || package.StartsWith("Npgsql", StringComparison.Ordinal));
+        }
+
         JsonElement properties = evaluation.RootElement.GetProperty("Properties");
         Assert.Equal("net10.0", properties.GetProperty("TargetFramework").GetString());
         Assert.Equal("enable", properties.GetProperty("Nullable").GetString());

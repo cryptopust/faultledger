@@ -10,5 +10,6 @@
         <Project Path="tests/FaultLedger.Architecture.Tests/FaultLedger.Architecture.Tests.csproj" />
         <Project Path="tests/FaultLedger.Domain.Tests/FaultLedger.Domain.Tests.csproj" />
         <Project Path="tests/FaultLedger.IntegrationTests/FaultLedger.IntegrationTests.csproj" />
+        <Project Path="tests/FaultLedger.Infrastructure.Tests/FaultLedger.Infrastructure.Tests.csproj" />
     </Folder>
 </Solution>

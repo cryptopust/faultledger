@@ -4,26 +4,33 @@ A deterministic .NET engineering failure laboratory for studying distributed
 financial-style orchestration. It is not a payment processor, bank, wallet,
 real-money service, or compliance-certified platform. Synthetic data only.
 
-## Current stage: repository/tooling bootstrap (0B)
+## Current stage: deterministic provider failure laboratory (2)
 
-Implemented files establish repository governance, an eight-project .NET 10
-solution, explicit dependency boundaries, two API health endpoints, PostgreSQL
-Compose configuration, a multi-stage API Dockerfile, centralized locked package
-dependencies, a CI workflow, and architecture/HTTP/PostgreSQL test infrastructure.
+The existing governance, nine-project .NET 10 solution, health endpoints,
+PostgreSQL development Compose configuration, Dockerfile and CI are retained.
+Stage 1's exact Money, guarded Transfer state machine, controlled timestamps,
+explicit application orchestration, PostgreSQL EF mappings, migration, optimistic
+version checks and transfer POST/GET contracts remain in place. Stage 2 adds a
+deterministic MockProvider scenario catalog, an explicit provider acceptance
+boundary, typed acceptance evidence, and a process-local simulated provider
+ledger with separate submission-attempt and accepted-operation counters.
 
-**Validation boundary:** local restore, build, architecture tests and the negative
-HTTP health regressions have passed. Docker/WSL are absent on the bootstrap
-workstation: the three real-PostgreSQL tests fail their Docker prerequisite rather
-than skip. Compose configuration was validated with the official standalone
-Compose binary, but container image builds and Compose runtime behavior are not
-yet demonstrated here. CI is configured, not claimed to have run remotely.
-See the [validation record](docs/runbooks/bootstrap-validation.md) for exact results.
+**Evidence boundary:** non-Docker behavior, compiled boundaries and migration
+model/SQL generation can run locally. Real migration execution, PostgreSQL
+round trips, concurrency and successful end-to-end submission require Docker.
+Docker remains unavailable here; those tests fail prerequisite initialization,
+not skip. Container builds/runtime and remote CI execution remain unverified.
+See the [Stage 1 validation record](docs/runbooks/stage1-validation.md).
+The [bootstrap record](docs/runbooks/bootstrap-validation.md) is historical.
 
-Not implemented: Money, Transfer, state machines, idempotency, provider simulation
-or submission, UNKNOWN outcomes, reconciliation, callbacks, durable inbox, outbox,
-audit trail, Redis, Toxiproxy, or application OpenTelemetry instrumentation. There
-is no application database schema or migration. Empty Domain/Application projects
-are deliberate; no placeholder business classes or fake tests were added.
+**Not implemented:** canonical idempotency replay/fingerprints, automatic
+Unknown detection, reconciliation, callbacks, inbox/outbox, audit history,
+background workers, Redis, Toxiproxy or business telemetry. Stage 2's provider
+ledger is fake external truth only; it is not PostgreSQL authority and does not
+prove durable idempotency. No automatic retry or repost exists.
+Unknown exists only as a domain state. Duplicate keys fail closed with 409; this
+is not the completed idempotency contract.
+Full Definition of Done is not satisfied while PostgreSQL evidence is blocked.
 
 ## Prerequisites
 
@@ -54,8 +61,9 @@ git status --short
 Plain root `dotnet build` and `dotnet test` also select the complete solution.
 On Windows run `powershell -NoProfile -File scripts/Verify-Governance.ps1`;
 on PowerShell 7 use `pwsh` instead. Do not use `-BootstrapOnly` after stage 0A.
-No test filter is used by CI or the completion gate. A missing Docker engine is
-not a passing database suite.
+No test filter is used by CI or the full Definition of Done gate. For the
+explicitly authorized conditional local checkpoint, run the non-Docker filter
+three times as well; a missing Docker engine is not a passing database suite.
 
 ## Run the local stack
 
@@ -75,6 +83,34 @@ docker compose down
 Do not add `--volumes` to shutdown: retain the named development volume.
 For native `dotnet run`, set `ConnectionStrings__Postgres` explicitly; .NET does
 not automatically load `.env`. The runbook provides shell-specific examples.
+Apply the [explicit migration workflow](docs/runbooks/transfer-persistence.md)
+before calling transfer endpoints. Startup never creates or migrates the schema.
+
+## Transfer API (synthetic laboratory only)
+
+`POST /api/transfers` accepts `clientReference`, `idempotencyKey`, `amount`, and
+`currency`. For example:
+
+```json
+{"clientReference":"order-1001","idempotencyKey":"order-1001-attempt","amount":125.50,"currency":"USD"}
+```
+
+Amounts use exact fixed-point JSON numeric tokens with at most 20 integer and
+8 fractional digits. Exponents, quoted numbers and excessive precision are
+rejected rather than rounded. Currency validates three ASCII letters only,
+not official currency status. References use ASCII letters, digits, `.`, `_`,
+`:`, and `-`; client references allow 1-100 characters and keys 1-128.
+
+Successful POST returns `201`, a Location, and an explicit response in `Accepted`
+state, not `Completed`. `GET /api/transfers/{id}` reads local durable state;
+missing identities produce a typed 404. Validation returns 400, duplicate keys
+and concurrency conflicts 409, and classified persistence outages 503. No entity
+or stack trace is returned. Keys are globally scoped and case-sensitive.
+
+Do not automatically repost or replace a key after an error. A crash after
+durable Submitting may leave a possibly accepted operation without local
+certainty. No recovery/resubmission worker exists. This unauthenticated local
+laboratory must not be exposed to an untrusted network or real payment data.
 
 ## Health contract
 
@@ -89,6 +125,8 @@ deadline. Request cancellation propagates. Missing or malformed configuration an
 the unchanged `CHANGE_ME_LOCAL_ONLY` placeholder do not make readiness healthy.
 Configuration is captured when the probe is first created; changing it requires
 host recreation. A database outage does not itself prevent process startup.
+Readiness checks connectivity, not whether migrations have been applied or
+whether a transfer outcome is known. Operators must apply migrations explicitly.
 
 ## Repository guidance
 
@@ -99,6 +137,8 @@ validation record describe the current implementation/evidence, not those older
 status snapshots.
 
 See [repository structure](docs/architecture/repository-structure.md),
-[ADR 0001](docs/adr/0001-modular-monolith-bootstrap.md), and the
-[scenario index](docs/scenarios/README.md). No deployment, release, package
-publication, automatic staging, or Git commit is part of this stage.
+[transfer design](docs/architecture/transfer-domain.md),
+[ADR 0002](docs/adr/0002-transfer-domain-and-persistence.md),
+[ADR 0003](docs/adr/0003-deterministic-provider-failure-model.md), and the
+[scenario index](docs/scenarios/README.md). Prompt 1 authorizes reviewed local
+checkpoint commits only; no push, release, tag or remote mutation is authorized.

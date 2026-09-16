@@ -60,9 +60,10 @@ docker compose down
 Shutdown does not remove the named volume. Do not use `down --volumes` as routine
 cleanup. Changing initialization credentials in `.env` does not change an already
 initialized PostgreSQL role; keep settings consistent or perform an explicitly
-authorized local database maintenance action. No migrations or business tables
-are created here. The bootstrap DB administrator is local-only, not production
-least privilege.
+authorized local database maintenance action. Follow the explicit
+[transfer migration workflow](transfer-persistence.md) before using transfer
+endpoints; API startup does not migrate. The bootstrap DB administrator is
+local-only, not production least privilege.
 
 ## Native API with Compose PostgreSQL
 
@@ -95,7 +96,7 @@ Use the root commands in [README](../../README.md) and `docker compose config
 restore, the same solution build/tests/format verification, the governance check,
 Compose validation, and an image build. No deployment or registry push exists.
 
-The three `RequiresDocker` tests use a disposable PostgreSQL container with
+The `RequiresDocker` tests use disposable PostgreSQL containers with
 synthetic credentials, bounded startup, and automatic cleanup. They do not use
 or delete the named development volume. Docker missing/unavailable is an error,
 not a test skip. A three-minute container lifecycle watchdog is not simulated
@@ -110,4 +111,4 @@ host/connectivity lifecycle coverage, not proof of crash-safe business state.
 For diagnostic work only, `dotnet test --filter 'Category!=RequiresDocker'`
 exercises the remaining checks without containers. This is not the full validation
 gate and must never be reported as PostgreSQL success. See the
-[bootstrap validation record](bootstrap-validation.md) for known blockers.
+[Stage 1 validation record](stage1-validation.md) for known blockers.

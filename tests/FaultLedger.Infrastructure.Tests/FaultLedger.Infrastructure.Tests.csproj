@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../../src/FaultLedger.Infrastructure/FaultLedger.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

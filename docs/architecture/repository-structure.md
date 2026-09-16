@@ -20,28 +20,30 @@ files. Test defaults explicitly import the root props rather than replacing them
 
 | Project | Current responsibility |
 | --- | --- |
-| Domain | Empty pure-library boundary; no domain model or placeholder class |
-| Application | Empty use-case coordination boundary with an inward Domain reference |
-| Infrastructure | PostgreSQL readiness `IHealthCheck`, pooled Npgsql data source ownership, DI registration |
-| Api | Application entry point/composition root and GET liveness/readiness mappings only |
+| Domain | Immutable Money, validated Transfer identity/references, explicit state transitions and controlled timestamps |
+| Application | Transfer creation/submission orchestration, transfer-specific persistence/provider contracts and read model |
+| Infrastructure | PostgreSQL readiness, EF persistence records/mappings/migration, optimistic store, deterministic MockProvider scenarios/ledger and DI |
+| Api | Composition root, liveness/readiness, explicit POST/GET transfer DTOs and sanitized errors |
 | Architecture.Tests | Evaluate actual MSBuild project/package/framework references and strict properties |
-| Domain.Tests | Verify compiled Domain assembly references do not acquire non-permitted dependencies |
-| Application.Tests | Verify compiled Application assembly does not reference host or adapter libraries |
-| IntegrationTests | Real application HTTP host, isolated configuration, negative health tests, and mandatory Testcontainers PostgreSQL tests |
+| Domain.Tests | Compiled boundary checks, exact money, invalid input, all state edges, terminal protection and timestamps |
+| Application.Tests | Compiled boundary checks, submission ordering, validation, cancellation and storage-failure behavior using explicit unit doubles |
+| IntegrationTests | Real HTTP contract/health tests, offline EF model checks, plus mandatory PostgreSQL migration/round-trip/concurrency/API/reload tests |
 
 Domain cannot depend on configuration, logging, HTTP, ORM, database drivers, or
 other infrastructure. Infrastructure uses the framework's existing health-check
 interface; no speculative `IDatabaseReadinessProbe`, repository, or unit of work
 is needed. Api contains no Npgsql queries or business logic.
 
-## Future work placement, not implemented components
+## Persistence and provider placement
 
-When a later task requests persistence, its adapters/migrations belong under
-Infrastructure, with real PostgreSQL evidence in IntegrationTests. Provider
-adapters also belong at the Infrastructure boundary; Domain remains independent
-of their payloads or SDKs. Domain and application behavior will receive tests in
-their existing test projects. These statements allocate responsibility only;
-none authorizes creating a schema, provider, event flow, or model now.
+Infrastructure now owns EF, Npgsql and migration tooling. Domain objects are
+rehydrated through validated construction rather than ORM mutable public setters.
+Application sees ITransferStore and ITransferProvider, not EF/provider library
+types. The API composes implementations but does not execute SQL or orchestrate
+state transitions. The MockProvider ledger is a process-local fake external
+model, not a FaultLedger correctness store. No generic repository, UnitOfWork or
+real provider network client is required. See [transfer design](transfer-domain.md),
+[ADR 0002](../adr/0002-transfer-domain-and-persistence.md) and [ADR 0003](../adr/0003-deterministic-provider-failure-model.md).
 
 ## Current operational boundary
 
@@ -50,10 +52,10 @@ remain unverified on this workstation. Compose defines development PostgreSQL
 and a named volume. Published ports are configured for loopback only. The
 container dependency controls initial startup order, while application readiness
 checks live connectivity independently. Liveness never waits on PostgreSQL.
-Readiness says nothing about future schema completeness, migrations, durable
+Readiness says nothing about schema completeness, migrations, durable
 business invariants, or financial safety.
 
 Architecture checks evaluate the checked-in graph, not every possible future
 conditional build or semantic I/O use hidden inside BCL types. Review remains
-mandatory. Read [validation evidence](../runbooks/bootstrap-validation.md) before
+mandatory. Read [validation evidence](../runbooks/stage1-validation.md) before
 interpreting a configured component as successfully exercised.
