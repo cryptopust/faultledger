@@ -1,0 +1,9 @@
+@FaultLedger.Api_HostAddress = http://localhost:8080
+
+GET {{FaultLedger.Api_HostAddress}}/health/live
+Accept: text/plain
+
+###
+
+GET {{FaultLedger.Api_HostAddress}}/health/ready
+Accept: text/plain

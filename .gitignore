@@ -1,0 +1,52 @@
+# Rider, Visual Studio, and user-local tooling
+.idea/
+**/.idea/
+.vs/
+.vscode/
+*.sln.iml
+*.iml
+workspace.xml
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+_ReSharper*/
+*.sln.ide/
+
+# .NET build, package output, and test artifacts
+bin/
+obj/
+[Tt]est[Rr]esults/
+TestResults/
+coverage/
+artifacts/
+*.coverage
+*.coveragexml
+*.trx
+*.nupkg
+*.snupkg
+
+# Local configuration, credentials, and diagnostics
+.env
+.env.*
+!.env.example
+secrets.json
+*.pfx
+*.p12
+*.pem
+*.key
+*.log
+logs/
+dumps/
+*.dmp
+
+# OS and temporary editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# Future EF Core migrations and package lock files must remain versionable.

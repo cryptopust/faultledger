@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      DOTNET_NOLOGO: "true"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+      POSTGRES_PASSWORD: faultledger_ci_local_only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          global-json-file: global.json
+      - name: Verify governance
+        shell: pwsh
+        run: ./scripts/Verify-Governance.ps1
+      - name: Check Docker prerequisite
+        run: docker info
+      - name: Restore locked dependencies
+        run: dotnet restore --locked-mode
+      - name: Build
+        run: dotnet build --no-restore
+      - name: Test
+        run: dotnet test --no-build --no-restore
+      - name: Repeat tests
+        run: dotnet test --no-build --no-restore
+      - name: Verify format
+        run: dotnet format --verify-no-changes --no-restore
+      - name: Validate Compose
+        run: docker compose config --quiet
+      - name: Build API image
+        run: docker build --tag faultledger-api:ci .
+      - name: Check whitespace
+        run: git diff --check

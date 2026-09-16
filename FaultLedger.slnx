@@ -1,0 +1,14 @@
+<Solution>
+    <Folder Name="/src/">
+        <Project Path="src/FaultLedger.Api/FaultLedger.Api.csproj" />
+        <Project Path="src/FaultLedger.Application/FaultLedger.Application.csproj" />
+        <Project Path="src/FaultLedger.Domain/FaultLedger.Domain.csproj" />
+        <Project Path="src/FaultLedger.Infrastructure/FaultLedger.Infrastructure.csproj" />
+    </Folder>
+    <Folder Name="/tests/">
+        <Project Path="tests/FaultLedger.Application.Tests/FaultLedger.Application.Tests.csproj" />
+        <Project Path="tests/FaultLedger.Architecture.Tests/FaultLedger.Architecture.Tests.csproj" />
+        <Project Path="tests/FaultLedger.Domain.Tests/FaultLedger.Domain.Tests.csproj" />
+        <Project Path="tests/FaultLedger.IntegrationTests/FaultLedger.IntegrationTests.csproj" />
+    </Folder>
+</Solution>
