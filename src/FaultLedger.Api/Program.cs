@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using FaultLedger.Api.Callbacks;
 using FaultLedger.Api.Transfers;
 using FaultLedger.Application.Transfers;
 using FaultLedger.Infrastructure;
@@ -16,6 +17,8 @@ public sealed class Program
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddScoped<TransferService>();
         builder.Services.AddScoped<TransferReconciliationService>();
+        builder.Services.AddScoped<ProviderCallbackService>();
+        builder.Services.AddSingleton<ProviderCallbackAuthenticator>();
         builder.Services.AddProblemDetails();
         builder.Services.AddExceptionHandler<ApiExceptionHandler>();
         builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
@@ -25,6 +28,7 @@ public sealed class Program
         var app = builder.Build();
         app.UseExceptionHandler();
         app.MapTransferEndpoints();
+        app.MapProviderCallbackEndpoints();
 
         app.MapHealthChecks("/health/live", new HealthCheckOptions
         {

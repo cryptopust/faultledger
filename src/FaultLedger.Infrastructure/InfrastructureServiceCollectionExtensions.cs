@@ -14,6 +14,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddDbContext<FaultLedgerDbContext>((provider, options) =>
             options.UseNpgsql(PostgresTransferConfiguration.GetConnectionString(provider.GetRequiredService<IConfiguration>())));
         services.AddScoped<ITransferStore, PostgresTransferStore>();
+        services.AddScoped<IProviderInboxStore, PostgresProviderInboxStore>();
+        services.AddSingleton<IProviderInboxProcessingHook, NoOpProviderInboxProcessingHook>();
         services.AddSingleton<MockProviderLedger>();
         services.AddScoped<ITransferProvider>(provider => new SyntheticTransferProvider(
             provider.GetRequiredService<MockProviderLedger>(), MockProviderScenario.Success,

@@ -16,6 +16,10 @@ public sealed class ApiExceptionHandler(ILogger<ApiExceptionHandler> logger) : I
         (int status, string title, string detail) = exception switch
         {
             TransferValidationException => (400, "Invalid transfer request", exception.Message),
+            CallbackAuthenticationException => (401, "Invalid callback authentication", "The callback signature is invalid."),
+            ProviderCallbackValidationException => (400, "Invalid provider callback", exception.Message),
+            ProviderEventConflictException => (409, "Provider event conflict", exception.Message),
+            ProviderCallbackConflictException => (409, "Provider callback conflict", exception.Message),
             BadHttpRequestException => (400, "Invalid request body", "Use the documented JSON contract."),
             IdempotencyConflictException => (409, "Idempotency conflict", exception.Message),
             TransferConcurrencyException => (409, "Transfer concurrency conflict", exception.Message),

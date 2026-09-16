@@ -33,8 +33,13 @@ correlated by durable `TransferId`. Replays and reconciliation never invoke
 the external-call evidence. The provider ledger is still fake external truth
 only, not a FaultLedger idempotency mechanism.
 
-**Not implemented:** callbacks, durable callback inbox, outbox, audit history,
-background reconciliation workers, Redis, Toxiproxy or business telemetry. No
+Stage 5 adds a synthetic HMAC-authenticated callback endpoint, a PostgreSQL
+durable callback inbox, provider-event deduplication, recoverable processing,
+and non-regressive out-of-order handling. Receipt is acknowledged only after
+the inbox insert commits; callback processing never invokes provider submission
+and may resolve `Unknown` from valid callback evidence. **Not implemented:**
+transactional outbox, audit history, background reconciliation workers, Redis,
+Toxiproxy or business telemetry. No
 automatic retry or repost exists. A crash after durable `Submitting` and before
 FaultLedger classifies the provider result remains a conservative unresolved
 recovery boundary; Stage 4 does not reset it based on elapsed time or a single
@@ -153,6 +158,7 @@ status snapshots.
 
 See [repository structure](docs/architecture/repository-structure.md),
 [transfer design](docs/architecture/transfer-domain.md),
+[durable callback inbox](docs/architecture/durable-callback-inbox.md),
 [ADR 0002](docs/adr/0002-transfer-domain-and-persistence.md),
 [ADR 0003](docs/adr/0003-deterministic-provider-failure-model.md), and the
 [scenario index](docs/scenarios/README.md). Prompt 1 authorizes reviewed local

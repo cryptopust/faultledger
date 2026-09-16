@@ -139,6 +139,57 @@ public sealed class Transfer
         Transition(TransferState.Unknown, TransferState.ManualReview, timestamp);
     }
 
+    public CallbackTransition ApplyAcceptedCallback(string providerReference, DateTimeOffset timestamp)
+    {
+        ValidateReference(providerReference, ReferenceMaximumLength, nameof(providerReference));
+        return State switch
+        {
+            TransferState.Submitting => Apply(() => MarkAccepted(providerReference, timestamp)),
+            TransferState.Unknown => Apply(() => ResolveAccepted(providerReference, timestamp)),
+            TransferState.Accepted => CallbackTransition.AlreadyApplied,
+            TransferState.Completed => CallbackTransition.Stale,
+            _ => throw new InvalidTransferTransitionException(State, TransferState.Accepted)
+        };
+    }
+
+    public CallbackTransition ApplyCompletedCallback(string providerReference, string completionEvidence,
+        DateTimeOffset timestamp)
+    {
+        ValidateReference(providerReference, ReferenceMaximumLength, nameof(providerReference));
+        RequireEvidence(completionEvidence);
+        return State switch
+        {
+            TransferState.Submitting => Apply(() =>
+            {
+                MarkAccepted(providerReference, timestamp);
+                MarkCompleted(completionEvidence, timestamp);
+            }),
+            TransferState.Accepted => Apply(() => MarkCompleted(completionEvidence, timestamp)),
+            TransferState.Unknown => Apply(() => ResolveCompleted(providerReference, completionEvidence, timestamp)),
+            TransferState.Completed => CallbackTransition.AlreadyApplied,
+            _ => throw new InvalidTransferTransitionException(State, TransferState.Completed)
+        };
+    }
+
+    public CallbackTransition ApplyRejectedCallback(string rejectionEvidence, DateTimeOffset timestamp)
+    {
+        RequireEvidence(rejectionEvidence);
+        return State switch
+        {
+            TransferState.Submitting => Apply(() => MarkFailed(rejectionEvidence, timestamp)),
+            TransferState.Unknown => Apply(() => ResolveFailed(rejectionEvidence, timestamp)),
+            TransferState.Failed => CallbackTransition.AlreadyApplied,
+            TransferState.Completed or TransferState.Accepted => CallbackTransition.Stale,
+            _ => throw new InvalidTransferTransitionException(State, TransferState.Failed)
+        };
+    }
+
+    private static CallbackTransition Apply(Action transition)
+    {
+        transition();
+        return CallbackTransition.Applied;
+    }
+
     private void Transition(TransferState expected, TransferState target, DateTimeOffset timestamp)
     {
         if (State != expected)
@@ -185,4 +236,11 @@ public sealed class Transfer
             throw new ArgumentException($"Reference must contain 1-{maximumLength} ASCII letters, digits, '-', '_', '.', or ':'.", name);
         }
     }
+}
+
+public enum CallbackTransition
+{
+    Applied,
+    AlreadyApplied,
+    Stale
 }

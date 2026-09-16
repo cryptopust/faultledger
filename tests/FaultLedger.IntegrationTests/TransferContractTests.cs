@@ -73,7 +73,7 @@ public sealed class TransferContractTests
     {
         using var database = new FaultLedgerDbContext(new DbContextOptionsBuilder<FaultLedgerDbContext>()
             .UseNpgsql("Host=localhost;Database=model_inspection_only").Options);
-        var entity = Assert.Single(database.Model.GetEntityTypes());
+        var entity = Assert.Single(database.Model.GetEntityTypes(), item => item.GetTableName() == "transfers");
         Assert.Equal("transfers", entity.GetTableName());
         var amount = entity.FindProperty("Amount");
         Assert.NotNull(amount);
@@ -89,6 +89,9 @@ public sealed class TransferContractTests
         Assert.Contains("request_fingerprint", script, StringComparison.Ordinal);
         Assert.Contains("fingerprint_version", script, StringComparison.Ordinal);
         Assert.Contains("ck_transfers_state_version", script, StringComparison.Ordinal);
+        Assert.Contains("provider_inbox", script, StringComparison.Ordinal);
+        Assert.Contains("uq_provider_inbox_provider_event_id", script, StringComparison.Ordinal);
+        Assert.Contains("ck_provider_inbox_processing_status", script, StringComparison.Ordinal);
         Assert.DoesNotContain("double precision", script, StringComparison.OrdinalIgnoreCase);
     }
 

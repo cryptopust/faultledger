@@ -6,6 +6,7 @@ namespace FaultLedger.Infrastructure.Persistence;
 public sealed class FaultLedgerDbContext(DbContextOptions<FaultLedgerDbContext> options) : DbContext(options)
 {
     internal DbSet<TransferRecord> Transfers => Set<TransferRecord>();
+    internal DbSet<ProviderInboxRecord> ProviderInbox => Set<ProviderInboxRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -36,5 +37,33 @@ public sealed class FaultLedgerDbContext(DbContextOptions<FaultLedgerDbContext> 
         transfer.Property(record => record.CreatedAt).HasColumnName("created_at");
         transfer.Property(record => record.UpdatedAt).HasColumnName("updated_at");
         transfer.Property(record => record.Version).HasColumnName("version").IsConcurrencyToken().ValueGeneratedNever();
+
+        var inbox = modelBuilder.Entity<ProviderInboxRecord>();
+        inbox.ToTable("provider_inbox", table =>
+        {
+            table.HasCheckConstraint("ck_provider_inbox_event_type", "event_type IN ('Accepted', 'Completed', 'Rejected', 'Failed')");
+            table.HasCheckConstraint("ck_provider_inbox_processing_status", "processing_status IN ('Pending', 'Processing', 'Processed', 'Failed')");
+            table.HasCheckConstraint("ck_provider_inbox_attempt_count", "attempt_count >= 0");
+            table.HasCheckConstraint("ck_provider_inbox_payload_version", "payload_version = 1");
+        });
+        inbox.HasKey(record => record.InboxId).HasName("pk_provider_inbox");
+        inbox.Property(record => record.InboxId).HasColumnName("inbox_id").ValueGeneratedNever();
+        inbox.Property(record => record.ProviderEventId).HasColumnName("provider_event_id").HasMaxLength(128).UseCollation("C").IsRequired();
+        inbox.HasIndex(record => record.ProviderEventId).IsUnique().HasDatabaseName("uq_provider_inbox_provider_event_id");
+        inbox.Property(record => record.ProviderOperationCorrelation).HasColumnName("provider_operation_correlation");
+        inbox.HasIndex(record => record.ProviderOperationCorrelation).HasDatabaseName("ix_provider_inbox_operation_correlation");
+        inbox.Property(record => record.EventType).HasColumnName("event_type").HasMaxLength(32).IsRequired();
+        inbox.Property(record => record.ProviderReference).HasColumnName("provider_reference").HasMaxLength(Transfer.ReferenceMaximumLength);
+        inbox.Property(record => record.Evidence).HasColumnName("evidence").HasMaxLength(200).IsRequired();
+        inbox.Property(record => record.OccurredAt).HasColumnName("occurred_at");
+        inbox.Property(record => record.ReceivedAt).HasColumnName("received_at");
+        inbox.Property(record => record.NormalizedPayload).HasColumnName("normalized_payload").HasMaxLength(2048).IsRequired();
+        inbox.Property(record => record.PayloadVersion).HasColumnName("payload_version");
+        inbox.Property(record => record.ProcessingStatus).HasColumnName("processing_status").HasMaxLength(16).IsRequired();
+        inbox.Property(record => record.ProcessedAt).HasColumnName("processed_at");
+        inbox.Property(record => record.AttemptCount).HasColumnName("attempt_count");
+        inbox.Property(record => record.LastError).HasColumnName("last_error").HasMaxLength(500);
+        inbox.Property(record => record.TransferId).HasColumnName("transfer_id");
+        inbox.HasIndex(record => new { record.ProcessingStatus, record.ReceivedAt }).HasDatabaseName("ix_provider_inbox_processing");
     }
 }
