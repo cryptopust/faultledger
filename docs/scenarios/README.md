@@ -8,9 +8,11 @@ fake-provider ledger access. They do not prove PostgreSQL behavior or durable
 FaultLedger idempotency.
 
 See [testing rules](../engineering/TESTING_RULES.md), the conceptual
-[failure model](../engineering/FAILURE_MODEL.md), and the current
-[validation record](../runbooks/stage1-validation.md). Stage 4 implements
-explicit Unknown interpretation and provider lookup reconciliation without
-automatic repost. Callbacks, durable inbox/outbox processing and scheduling are
-not implemented. Future scenario documents must describe implemented,
-deterministically tested behavior, not planned claims.
+[failure model](../engineering/FAILURE_MODEL.md), and the current validation
+records. Stage 4 implements explicit Unknown interpretation and provider lookup
+reconciliation without automatic repost. Stage 5 adds the durable callback
+inbox; Stage 6 adds the transactional outbox, recoverable dispatcher, durable
+consumer deduplication, and Docker-required Toxiproxy scenarios. The network
+scenarios remain blocked when Docker is unavailable. Scenario documents must
+describe implemented behavior and distinguish blocked PostgreSQL evidence from
+pure deterministic tests.

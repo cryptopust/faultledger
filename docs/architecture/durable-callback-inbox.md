@@ -36,4 +36,4 @@ COMPLETED arrives -> Completed
 later ACCEPTED arrives -> event retained, state remains Completed
 ```
 
-`Unknown` may therefore resolve from a valid callback without reposting. Reconciliation and callbacks use the same explicit domain transitions and optimistic durable state; a callback can complete a transfer already reconciled to `Accepted`, while a late `Accepted` callback cannot overwrite a reconciled `Completed` state. Transactional outbox, callback workers, external brokers, and exactly-once delivery remain later-stage work.
+`Unknown` may therefore resolve from a valid callback without reposting. Reconciliation and callbacks use the same explicit domain transitions and optimistic durable state; a callback can complete a transfer already reconciled to `Accepted`, while a late `Accepted` callback cannot overwrite a reconciled `Completed` state. When completion is applied, the callback transaction also creates the `TransferCompleted` outbox row atomically; the dispatcher publishes it at least once outside the database transaction. No external broker or exactly-once distributed delivery guarantee is claimed.

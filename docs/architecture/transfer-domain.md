@@ -105,8 +105,9 @@ test is not a claim of 100-request or multi-process idempotency proof.
 
 ## Actual submission sequence and failure windows
 
-Each store save commits separately using EF's transaction behavior; Application
-does not open a transaction. The MockProvider performs no real network I/O and
+Transfer updates use an explicit PostgreSQL transaction; completion updates
+also insert the outbox message before commit. Application does not open the
+database transaction. The MockProvider performs no real network I/O and
 records fake external truth in a separate process-local ledger. Its interface
 does not move transactions around a provider call.
 
@@ -135,8 +136,9 @@ cannot yet be classified from a durable `Submitting` row alone. Durable
 Submitting must be interpreted as possibly attempted/ambiguous, never as
 ordinary failure or permission to send. Stage 4 classifies explicit ambiguous
 provider results as Unknown and offers explicit provider lookup reconciliation;
-it does not reset a crash-stuck Submitting row. There is no automatic
-dispatcher, repost, recovery worker, callback, inbox, outbox or audit table.
+it does not reset a crash-stuck Submitting row. Stage 5 adds the durable
+callback inbox. Stage 6 adds an atomic completion outbox and at-least-once
+integration-event dispatcher; that dispatcher never calls provider submission.
 Stage 2's provider failure simulator and ledger are test/laboratory behavior
 only and do not make the local PostgreSQL workflow durable across provider
 ambiguity.

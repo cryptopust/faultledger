@@ -142,6 +142,10 @@ public sealed class PostgresProviderInboxStore(
             record.UpdatedAt = transfer.UpdatedAt;
             record.Version = transfer.Version;
             inbox.TransferId = transfer.Id;
+            if (transfer.State == TransferState.Completed)
+            {
+                database.OutboxMessages.Add(OutboxMessageRecord.FromCompletedTransfer(transfer));
+            }
         }
 
         return new CallbackProcessingDetails(inbox.InboxId, outcome, TransferDetails.FromTransfer(transfer),

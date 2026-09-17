@@ -4,9 +4,9 @@ A deterministic .NET engineering failure laboratory for studying distributed
 financial-style orchestration. It is not a payment processor, bank, wallet,
 real-money service, or compliance-certified platform. Synthetic data only.
 
-## Current stage: UNKNOWN outcomes and safe reconciliation (4)
+## Current stage: transactional outbox and at-least-once delivery (6)
 
-The existing governance, nine-project .NET 10 solution, health endpoints,
+The existing governance, ten-project .NET 10 solution, health endpoints,
 PostgreSQL development Compose configuration, Dockerfile and CI are retained.
 Stage 1's exact Money, guarded Transfer state machine, controlled timestamps,
 explicit application orchestration, PostgreSQL EF mappings, migration, optimistic
@@ -35,12 +35,14 @@ only, not a FaultLedger idempotency mechanism.
 
 Stage 5 adds a synthetic HMAC-authenticated callback endpoint, a PostgreSQL
 durable callback inbox, provider-event deduplication, recoverable processing,
-and non-regressive out-of-order handling. Receipt is acknowledged only after
-the inbox insert commits; callback processing never invokes provider submission
-and may resolve `Unknown` from valid callback evidence. **Not implemented:**
-transactional outbox, audit history, background reconciliation workers, Redis,
-Toxiproxy or business telemetry. No
-automatic retry or repost exists. A crash after durable `Submitting` and before
+and non-regressive out-of-order handling. Stage 6 adds a versioned
+`TransferCompleted` transactional outbox, PostgreSQL claim leases, stable event
+IDs across at-least-once redelivery, a durable duplicate-safe simulated
+consumer, and a Compose Toxiproxy path for real HTTP fault injection. Callback
+completion and reconciliation completion create one logical outbox event in
+the same transaction as the local state change. **Not implemented:** a message
+broker, global ordering, exactly-once distributed delivery, audit history, or
+automatic financial repost. A crash after durable `Submitting` and before
 FaultLedger classifies the provider result remains a conservative unresolved
 recovery boundary; Stage 4 does not reset it based on elapsed time or a single
 `NotFound` lookup.
@@ -97,8 +99,10 @@ docker compose down
 Do not add `--volumes` to shutdown: retain the named development volume.
 For native `dotnet run`, set `ConnectionStrings__Postgres` explicitly; .NET does
 not automatically load `.env`. The runbook provides shell-specific examples.
-Apply the [explicit migration workflow](docs/runbooks/transfer-persistence.md)
-before calling transfer endpoints. Startup never creates or migrates the schema.
+The Compose `migrate` one-shot service applies checked-in migrations before the
+API and simulated consumer start. Native development still uses the [explicit
+migration workflow](docs/runbooks/transfer-persistence.md); ordinary startup
+does not silently migrate the schema.
 
 ## Transfer API (synthetic laboratory only)
 
@@ -159,6 +163,9 @@ status snapshots.
 See [repository structure](docs/architecture/repository-structure.md),
 [transfer design](docs/architecture/transfer-domain.md),
 [durable callback inbox](docs/architecture/durable-callback-inbox.md),
+[transactional outbox](docs/architecture/transactional-outbox.md),
+[outbox crash scenarios](docs/scenarios/outbox-crash-recovery.md),
+[network-failure scenarios](docs/scenarios/network-failures.md),
 [ADR 0002](docs/adr/0002-transfer-domain-and-persistence.md),
 [ADR 0003](docs/adr/0003-deterministic-provider-failure-model.md), and the
 [scenario index](docs/scenarios/README.md). Prompt 1 authorizes reviewed local

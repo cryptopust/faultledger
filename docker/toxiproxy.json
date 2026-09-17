@@ -1,0 +1,8 @@
+[
+  {
+    "name": "simulated-consumer",
+    "listen": "0.0.0.0:8666",
+    "upstream": "simulated-consumer:8080",
+    "enabled": true
+  }
+]

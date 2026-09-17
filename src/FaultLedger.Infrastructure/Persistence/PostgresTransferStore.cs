@@ -1,3 +1,4 @@
+using FaultLedger.Application.IntegrationEvents;
 using FaultLedger.Application.Transfers;
 using FaultLedger.Domain;
 using Microsoft.EntityFrameworkCore;
@@ -6,7 +7,10 @@ using Npgsql;
 
 namespace FaultLedger.Infrastructure.Persistence;
 
-public sealed class PostgresTransferStore(FaultLedgerDbContext database, ILogger<PostgresTransferStore> logger) : ITransferStore
+public sealed class PostgresTransferStore(
+    FaultLedgerDbContext database,
+    ILogger<PostgresTransferStore> logger,
+    IOutboxPersistenceHook? persistenceHook = null) : ITransferStore
 {
     public async Task<TransferRegistration> CreateOrGetAsync(Transfer transfer, string requestFingerprint,
         int fingerprintVersion, CancellationToken cancellationToken)
@@ -67,6 +71,7 @@ public sealed class PostgresTransferStore(FaultLedgerDbContext database, ILogger
             throw new InvalidOperationException("Each durable update must represent exactly one transition.");
         }
 
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         var record = TransferRecord.FromTransfer(transfer);
         var entry = database.Attach(record);
         entry.Property(current => current.State).IsModified = true;
@@ -74,13 +79,29 @@ public sealed class PostgresTransferStore(FaultLedgerDbContext database, ILogger
         entry.Property(current => current.UpdatedAt).IsModified = true;
         entry.Property(current => current.Version).IsModified = true;
         entry.Property(current => current.Version).OriginalValue = expectedVersion;
+        OutboxMessageRecord? outbox = null;
+        if (transfer.State == TransferState.Completed)
+        {
+            outbox = OutboxMessageRecord.FromCompletedTransfer(transfer);
+            database.OutboxMessages.Add(outbox);
+        }
         try
         {
             await SaveAsync(cancellationToken);
+            if (transfer.State == TransferState.Completed)
+            {
+                await (persistenceHook ?? new NoOpOutboxPersistenceHook()).BeforeCommitAsync(transfer.Id,
+                    cancellationToken);
+            }
+            await transaction.CommitAsync(cancellationToken);
         }
         finally
         {
             entry.State = EntityState.Detached;
+            if (outbox is not null)
+            {
+                database.Entry(outbox).State = EntityState.Detached;
+            }
         }
     }
 
@@ -143,6 +164,14 @@ public sealed class PostgresTransferStore(FaultLedgerDbContext database, ILogger
             await database.SaveChangesAsync(cancellationToken);
         }
         catch (DbUpdateConcurrencyException)
+        {
+            throw new TransferConcurrencyException();
+        }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException
+        {
+            SqlState: PostgresErrorCodes.UniqueViolation,
+            ConstraintName: "uq_outbox_aggregate_event"
+        })
         {
             throw new TransferConcurrencyException();
         }

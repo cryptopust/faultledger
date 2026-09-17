@@ -96,7 +96,7 @@ is safe because lookup is side-effect-free with respect to provider submission.
 
 A transfer left in durable `Submitting` after a crash before FaultLedger has
 classified the provider result remains conservative and is not automatically
-recovered by this stage. No elapsed-time reset, automatic repost, callback,
-inbox, outbox, scheduler, Redis lock, or Polly retry is implemented. Provider
-callbacks and durable inbox processing are intentionally deferred to the next
-stage.
+recovered by this stage. No elapsed-time reset, automatic repost, scheduler,
+Redis lock, or Polly retry is implemented. Provider callbacks and their durable
+inbox are implemented in Stage 5; completion now creates the Stage 6 outbox
+event atomically, and its dispatcher never submits a provider operation.

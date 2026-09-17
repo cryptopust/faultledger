@@ -1,4 +1,6 @@
+using FaultLedger.Application.IntegrationEvents;
 using FaultLedger.Application.Transfers;
+using FaultLedger.Infrastructure.IntegrationEvents;
 using FaultLedger.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -15,6 +17,20 @@ public static class InfrastructureServiceCollectionExtensions
             options.UseNpgsql(PostgresTransferConfiguration.GetConnectionString(provider.GetRequiredService<IConfiguration>())));
         services.AddScoped<ITransferStore, PostgresTransferStore>();
         services.AddScoped<IProviderInboxStore, PostgresProviderInboxStore>();
+        services.AddScoped<IOutboxStore, PostgresOutboxStore>();
+        services.AddScoped<OutboxDispatcher>();
+        services.AddHttpClient(nameof(HttpIntegrationEventPublisher), client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(5);
+        });
+        services.AddOptions<IntegrationEventPublisherOptions>()
+            .BindConfiguration("IntegrationEvents:Publisher");
+        services.AddOptions<OutboxDispatcherWorkerOptions>()
+            .BindConfiguration("IntegrationEvents:Dispatcher");
+        services.AddScoped<IIntegrationEventPublisher, HttpIntegrationEventPublisher>();
+        services.AddSingleton<IOutboxDispatchHook, NoOpOutboxDispatchHook>();
+        services.AddSingleton<IOutboxPersistenceHook, NoOpOutboxPersistenceHook>();
+        services.AddHostedService<OutboxDispatcherWorker>();
         services.AddSingleton<IProviderInboxProcessingHook, NoOpProviderInboxProcessingHook>();
         services.AddSingleton<MockProviderLedger>();
         services.AddScoped<ITransferProvider>(provider => new SyntheticTransferProvider(

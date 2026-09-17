@@ -10,6 +10,7 @@ public sealed class ProjectBoundaryTests
     [InlineData("Application", new[] { "FaultLedger.Domain" })]
     [InlineData("Infrastructure", new[] { "FaultLedger.Application", "FaultLedger.Domain" })]
     [InlineData("Api", new[] { "FaultLedger.Application", "FaultLedger.Infrastructure" })]
+    [InlineData("SimulatedConsumer", new string[0])]
     public async Task ProductionProject_EvaluatedReferences_RespectDependencyDirection(
         string projectName, string[] expectedReferences)
     {
@@ -38,7 +39,7 @@ public sealed class ProjectBoundaryTests
             Assert.Contains("Microsoft.EntityFrameworkCore.Relational", packages);
             Assert.Contains("Microsoft.EntityFrameworkCore.Design", packages);
         }
-        else
+        else if (projectName != "SimulatedConsumer")
         {
             Assert.DoesNotContain(packages, package => package.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.Ordinal)
                 || package.StartsWith("Npgsql", StringComparison.Ordinal));

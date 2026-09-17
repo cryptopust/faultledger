@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="../../src/FaultLedger.Api/FaultLedger.Api.csproj" />
+    <ProjectReference Include="../../src/FaultLedger.SimulatedConsumer/FaultLedger.SimulatedConsumer.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
     <PackageReference Include="Npgsql" />
     <PackageReference Include="Testcontainers.PostgreSql" />

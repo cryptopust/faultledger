@@ -27,10 +27,64 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_HTTP_PORTS: 8080
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB:-faultledger};Username=${POSTGRES_USER:-faultledger_dev};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to an explicit local-only value}
+      IntegrationEvents__Publisher__Endpoint: http://toxiproxy:8666/integration-events
+      IntegrationEvents__Dispatcher__Enabled: "true"
+      IntegrationEvents__Dispatcher__WorkerId: compose-api
     ports:
       - "127.0.0.1:${API_PORT:-8080}:8080"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+
+  simulated-consumer:
+    image: faultledger-simulated-consumer:local
+    build:
+      context: .
+      dockerfile: src/FaultLedger.SimulatedConsumer/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_HTTP_PORTS: 8080
+      ConnectionStrings__ConsumerPostgres: Host=postgres;Port=5432;Database=${POSTGRES_DB:-faultledger};Username=${POSTGRES_USER:-faultledger_dev};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to an explicit local-only value}
+    ports:
+      - "127.0.0.1:${SIMULATED_CONSUMER_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/health/live | grep -q Healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    image: faultledger-api:local
+    command: ["dotnet", "FaultLedger.Api.dll", "--migrate-only"]
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB:-faultledger};Username=${POSTGRES_USER:-faultledger_dev};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to an explicit local-only value}
+    depends_on:
       postgres:
+        condition: service_healthy
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e
+    command:
+      - -host=0.0.0.0
+      - -config=/config/toxiproxy.json
+    volumes:
+      - ./docker/toxiproxy.json:/config/toxiproxy.json:ro
+    ports:
+      - "127.0.0.1:${TOXIPROXY_API_PORT:-8474}:8474"
+    depends_on:
+      simulated-consumer:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true

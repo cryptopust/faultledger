@@ -7,6 +7,7 @@ public sealed class FaultLedgerDbContext(DbContextOptions<FaultLedgerDbContext> 
 {
     internal DbSet<TransferRecord> Transfers => Set<TransferRecord>();
     internal DbSet<ProviderInboxRecord> ProviderInbox => Set<ProviderInboxRecord>();
+    internal DbSet<OutboxMessageRecord> OutboxMessages => Set<OutboxMessageRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -65,5 +66,34 @@ public sealed class FaultLedgerDbContext(DbContextOptions<FaultLedgerDbContext> 
         inbox.Property(record => record.LastError).HasColumnName("last_error").HasMaxLength(500);
         inbox.Property(record => record.TransferId).HasColumnName("transfer_id");
         inbox.HasIndex(record => new { record.ProcessingStatus, record.ReceivedAt }).HasDatabaseName("ix_provider_inbox_processing");
+
+        var outbox = modelBuilder.Entity<OutboxMessageRecord>();
+        outbox.ToTable("outbox_messages", table =>
+        {
+            table.HasCheckConstraint("ck_outbox_attempt_count", "attempt_count >= 0");
+            table.HasCheckConstraint("ck_outbox_event_type", "event_type = 'TransferCompleted'");
+            table.HasCheckConstraint("ck_outbox_schema_version", "schema_version = 1");
+            table.HasCheckConstraint("ck_outbox_lease_consistency", "(claimed_until IS NULL AND claimed_by IS NULL AND claim_id IS NULL) OR (claimed_until IS NOT NULL AND claimed_by IS NOT NULL AND claim_id IS NOT NULL)");
+        });
+        outbox.HasKey(record => record.Id).HasName("pk_outbox_messages");
+        outbox.Property(record => record.Id).HasColumnName("id").ValueGeneratedNever();
+        outbox.Property(record => record.AggregateId).HasColumnName("aggregate_id");
+        outbox.Property(record => record.AggregateVersion).HasColumnName("aggregate_version");
+        outbox.Property(record => record.EventType).HasColumnName("event_type").HasMaxLength(64).IsRequired();
+        outbox.Property(record => record.SchemaVersion).HasColumnName("schema_version");
+        outbox.Property(record => record.Payload).HasColumnName("payload").HasMaxLength(2048).IsRequired();
+        outbox.Property(record => record.CreatedAt).HasColumnName("created_at");
+        outbox.Property(record => record.PublishedAt).HasColumnName("published_at");
+        outbox.Property(record => record.AttemptCount).HasColumnName("attempt_count");
+        outbox.Property(record => record.NextAttemptAt).HasColumnName("next_attempt_at");
+        outbox.Property(record => record.ClaimId).HasColumnName("claim_id");
+        outbox.Property(record => record.ClaimedBy).HasColumnName("claimed_by").HasMaxLength(128);
+        outbox.Property(record => record.ClaimedUntil).HasColumnName("claimed_until");
+        outbox.Property(record => record.LastError).HasColumnName("last_error").HasMaxLength(500);
+        outbox.HasIndex(record => new
+        { record.PublishedAt, record.NextAttemptAt, record.ClaimedUntil, record.CreatedAt })
+            .HasDatabaseName("ix_outbox_due");
+        outbox.HasIndex(record => new { record.AggregateId, record.EventType })
+            .IsUnique().HasDatabaseName("uq_outbox_aggregate_event");
     }
 }

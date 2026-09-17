@@ -1,7 +1,9 @@
+using FaultLedger.Application.IntegrationEvents;
 using FaultLedger.Application.Transfers;
 using FaultLedger.Domain;
 using FaultLedger.Infrastructure;
 using FaultLedger.Infrastructure.Persistence;
+using FaultLedger.SimulatedConsumer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
@@ -66,6 +68,49 @@ public sealed class ProviderCallbackPostgresTests(PostgresFixture fixture) : ICl
         Assert.NotNull(current);
         Assert.Equal(TransferState.Completed, current.State);
         Assert.Equal(1, await verify.ProviderInboxCountAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(1, await verify.OutboxCountAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task CallbackCompletion_PublishesOneOutboxEventWithOneConsumerEffect()
+    {
+        string connectionString = await CreateDatabaseAsync();
+        await CreateUnknownTransferAsync(connectionString);
+        await using (var context = OpenContext(connectionString))
+        {
+            var inbox = new PostgresProviderInboxStore(context, TimeProvider.System,
+                new NoOpProviderInboxProcessingHook(), NullLogger<PostgresProviderInboxStore>.Instance);
+            await inbox.ReceiveAsync(Callback("evt-outbox"), "completed", TestContext.Current.CancellationToken);
+            Assert.Equal(CallbackProcessingOutcome.Applied,
+                (await inbox.ProcessAsync(TestContext.Current.CancellationToken))!.Outcome);
+        }
+
+        Guid eventId;
+        await using (var connection = new NpgsqlConnection(connectionString))
+        {
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using var command = new NpgsqlCommand("SELECT id FROM outbox_messages", connection);
+            eventId = Assert.IsType<Guid>(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken));
+        }
+
+        await using NpgsqlDataSource dataSource = NpgsqlDataSource.Create(connectionString);
+        var consumer = new SimulatedConsumerStore(dataSource, TimeProvider.System);
+        var publisher = new ConsumerPublisher(consumer);
+        await using (var context = OpenContext(connectionString))
+        {
+            var dispatcher = new OutboxDispatcher(new PostgresOutboxStore(context), publisher,
+                new NoOpOutboxDispatchHook(), TimeProvider.System);
+            Assert.Equal(OutboxDispatchResult.Published,
+                await dispatcher.DispatchNextAsync("callback-outbox-worker",
+                    TestContext.Current.CancellationToken));
+        }
+
+        ConsumerEventState state = await consumer.FindAsync(eventId,
+            TestContext.Current.CancellationToken) ?? throw new InvalidOperationException();
+        Assert.Equal(1, state.ReceiptCount);
+        Assert.Equal(1, state.LogicalEffectCount);
+        await using var verify = OpenContext(connectionString);
+        Assert.Equal(1, await verify.OutboxCountAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -82,6 +127,11 @@ public sealed class ProviderCallbackPostgresTests(PostgresFixture fixture) : ICl
                 inbox.ProcessAsync(TestContext.Current.CancellationToken));
         }
 
+        await using (var rolledBack = OpenContext(connectionString))
+        {
+            Assert.Equal(0, await rolledBack.OutboxCountAsync(TestContext.Current.CancellationToken));
+        }
+
         await using (var context = OpenContext(connectionString))
         {
             var inbox = new PostgresProviderInboxStore(context, TimeProvider.System,
@@ -95,6 +145,7 @@ public sealed class ProviderCallbackPostgresTests(PostgresFixture fixture) : ICl
         Transfer? current = await verify.FindTransferAsync(TransferId, TestContext.Current.CancellationToken);
         Assert.Equal(TransferState.Completed, current!.State);
         Assert.Equal(1, await verify.ProviderInboxCountAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(1, await verify.OutboxCountAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -268,12 +319,27 @@ public sealed class ProviderCallbackPostgresTests(PostgresFixture fixture) : ICl
         public Task<ProviderLookupResult> LookupAsync(ProviderLookupRequest request,
             CancellationToken cancellationToken) => Task.FromResult(ProviderLookupResult.ConfirmedAccepted("provider-callback"));
     }
+
+    private sealed class ConsumerPublisher(SimulatedConsumerStore consumer) : IIntegrationEventPublisher
+    {
+        public async Task PublishAsync(IntegrationEventMessage message, CancellationToken cancellationToken)
+        {
+            using var payload = System.Text.Json.JsonDocument.Parse(message.Payload);
+            var request = new IntegrationEventRequest(message.EventId, message.EventType, message.SchemaVersion,
+                message.AggregateId, message.AggregateVersion, message.OccurredAt, payload.RootElement.Clone());
+            Assert.NotNull(await consumer.ReceiveAsync(request, cancellationToken));
+        }
+    }
 }
 
 internal static class ProviderCallbackTestDbExtensions
 {
     public static Task<int> ProviderInboxCountAsync(this FaultLedgerDbContext context,
         CancellationToken cancellationToken) => context.Database.SqlQuery<int>($"SELECT count(*) FROM provider_inbox")
+        .SingleAsync(cancellationToken);
+
+    public static Task<int> OutboxCountAsync(this FaultLedgerDbContext context,
+        CancellationToken cancellationToken) => context.Database.SqlQuery<int>($"SELECT count(*) FROM outbox_messages")
         .SingleAsync(cancellationToken);
 
     public static async Task<Transfer?> FindTransferAsync(this FaultLedgerDbContext context, Guid transferId,

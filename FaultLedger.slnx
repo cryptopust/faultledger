@@ -4,6 +4,7 @@
         <Project Path="src/FaultLedger.Application/FaultLedger.Application.csproj" />
         <Project Path="src/FaultLedger.Domain/FaultLedger.Domain.csproj" />
         <Project Path="src/FaultLedger.Infrastructure/FaultLedger.Infrastructure.csproj" />
+        <Project Path="src/FaultLedger.SimulatedConsumer/FaultLedger.SimulatedConsumer.csproj" />
     </Folder>
     <Folder Name="/tests/">
         <Project Path="tests/FaultLedger.Application.Tests/FaultLedger.Application.Tests.csproj" />

@@ -3,7 +3,9 @@ using FaultLedger.Api.Callbacks;
 using FaultLedger.Api.Transfers;
 using FaultLedger.Application.Transfers;
 using FaultLedger.Infrastructure;
+using FaultLedger.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.EntityFrameworkCore;
 
 namespace FaultLedger.Api;
 
@@ -26,6 +28,13 @@ public sealed class Program
             options.SerializerOptions.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow);
 
         var app = builder.Build();
+        if (args.Contains("--migrate-only", StringComparer.Ordinal))
+        {
+            await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+            await scope.ServiceProvider.GetRequiredService<FaultLedgerDbContext>().Database.MigrateAsync();
+            return;
+        }
+
         app.UseExceptionHandler();
         app.MapTransferEndpoints();
         app.MapProviderCallbackEndpoints();
