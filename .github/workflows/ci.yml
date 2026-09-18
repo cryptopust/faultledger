@@ -1,4 +1,4 @@
-name: CI
+name: FaultLedger Full Verification
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       DOTNET_NOLOGO: "true"
       DOTNET_CLI_TELEMETRY_OPTOUT: "true"
@@ -24,19 +24,30 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
           global-json-file: global.json
+      - name: Show .NET environment
+        run: dotnet --info
       - name: Verify governance
         shell: pwsh
         run: ./scripts/Verify-Governance.ps1
       - name: Check Docker prerequisite
-        run: docker info
+        run: |
+          docker version
+          docker compose version
+          docker info
       - name: Restore locked dependencies
         run: dotnet restore --locked-mode
       - name: Build
         run: dotnet build --no-restore
       - name: Test
-        run: dotnet test --no-build --no-restore
+        run: >-
+          dotnet test --no-build --no-restore
+          --results-directory artifacts/test-results/full
+          --logger "trx;LogFileName=faultledger-full-verification.trx"
       - name: Repeat tests
-        run: dotnet test --no-build --no-restore
+        run: >-
+          dotnet test --no-build --no-restore
+          --results-directory artifacts/test-results/repeat
+          --logger "trx;LogFileName=faultledger-repeat-verification.trx"
       - name: Verify format
         run: dotnet format --verify-no-changes --no-restore
       - name: Validate Compose
@@ -45,3 +56,49 @@ jobs:
         run: docker build --tag faultledger-api:ci .
       - name: Check whitespace
         run: git diff --check
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: faultledger-test-results-${{ github.run_id }}
+          path: artifacts/test-results
+          if-no-files-found: warn
+
+  critical-stress:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DOTNET_NOLOGO: "true"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          global-json-file: global.json
+      - name: Restore locked dependencies
+        run: dotnet restore --locked-mode
+      - name: Build
+        run: dotnet build --no-restore
+      - name: Repeat critical Docker scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          filter='FullyQualifiedName~SameIdempotencyKey_OneHundredConcurrentRequests_SubmitsProviderExactlyOnce|FullyQualifiedName~TwoIndependentHosts_SameKeyContention_HasOneTransferAndProviderAttempt|FullyQualifiedName~ConcurrentDuplicateReceipt_IsArbitratedByPostgres|FullyQualifiedName~CallbackAndReconciliationRace_ConvergesToCompletedWithoutSubmission|FullyQualifiedName~TwoDispatchers_OnePendingMessage_ProduceOneClaimAndDelivery|FullyQualifiedName~CrashAfterPublishBeforeAck_RedeliversStableEventAndConsumerEffectIsOne|FullyQualifiedName~ResponsePathResetAfterConsumerCommit_RedeliveryKeepsLogicalEffectOne'
+          for iteration in $(seq 1 10); do
+            echo "Critical Docker repetition ${iteration}/10"
+            dotnet test tests/FaultLedger.IntegrationTests/FaultLedger.IntegrationTests.csproj \
+              --no-build --no-restore \
+              --filter "$filter" \
+              --results-directory "artifacts/test-results/stress/${iteration}" \
+              --logger "trx;LogFileName=faultledger-critical-${iteration}.trx"
+          done
+      - name: Upload stress test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: faultledger-critical-stress-${{ github.run_id }}
+          path: artifacts/test-results/stress
+          if-no-files-found: warn
