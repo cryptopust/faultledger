@@ -202,6 +202,15 @@ test. Governance lives in [AGENTS.md](AGENTS.md) and `docs/engineering`.
 - Durable inbox/outbox/audit/consumer dedupe and crash-after-publish scenarios.
 - Live Compose and Toxiproxy latency/unavailable/response-loss scenarios.
 
+GitHub Actions workflow `FaultLedger Full Verification` is configured to run the
+unfiltered suite, Docker/Testcontainers scenarios, ten critical stress
+repetitions, Compose validation, and retained TRX results. The push-triggered
+runs on 2026-09-18 (run IDs `35313203932` and `35314827156`) did not start a
+runner because the repository account was locked due to a GitHub billing issue.
+Those runs are therefore blocked evidence, not passing CI evidence. No
+PostgreSQL, Testcontainers, restart, outbox, consumer, or Toxiproxy claim is
+promoted on their basis.
+
 ### Documented design or limitation
 
 - No global delivery ordering; fixed five-second outbox retry; no max attempts
