@@ -301,7 +301,8 @@ public sealed class TransferServiceTests
             return RecordAsync(transfer, cancellationToken);
         }
 
-        public Task UpdateAsync(Transfer transfer, long expectedVersion, CancellationToken cancellationToken)
+        public Task UpdateAsync(Transfer transfer, long expectedVersion, CancellationToken cancellationToken,
+            TransferAuditMetadata? audit = null)
         {
             Assert.Equal(Saved[^1].Version, expectedVersion);
             return RecordAsync(transfer, cancellationToken);

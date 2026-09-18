@@ -90,6 +90,26 @@ public sealed class ProviderCallbackContractTests
         Assert.Equal(0, store.ReceiptCount);
     }
 
+    [Fact]
+    public async Task OversizedChunkedBody_IsRejectedWithoutReadingAnUnboundedPayload()
+    {
+        var store = new RecordingInboxStore();
+        await using var factory = CreateFactory(store);
+        using HttpClient client = factory.CreateClient();
+        byte[] body = new byte[4096];
+        Array.Fill(body, (byte)'x');
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/provider-callbacks")
+        {
+            Content = new UnknownLengthContent(body)
+        };
+        request.Headers.Add("X-FaultLedger-Signature", Sign(body));
+
+        using HttpResponseMessage response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(0, store.ReceiptCount);
+    }
+
     private static FaultLedgerApiFactory CreateFactory(RecordingInboxStore store) =>
         new FaultLedgerApiFactory("Host=127.0.0.1;Port=1;Database=unused;Username=synthetic;Password=synthetic_test_only")
             .WithServices(services =>
@@ -122,6 +142,20 @@ public sealed class ProviderCallbackContractTests
 
     private static string Sign(byte[] body) => Convert.ToHexString(HMACSHA256.HashData(
         Encoding.UTF8.GetBytes(Secret), body)).ToLowerInvariant();
+
+    private sealed class UnknownLengthContent(byte[] body) : HttpContent
+    {
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            await stream.WriteAsync(body);
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
 
     private sealed class RecordingInboxStore : IProviderInboxStore
     {

@@ -24,15 +24,20 @@ public sealed class PostgresTransferStore(
         record.RequestFingerprint = requestFingerprint;
         record.FingerprintVersion = fingerprintVersion;
         database.Transfers.Add(record);
+        TransferAuditEventRecord audit = TransferAuditEventRecord.Create(transfer, null,
+            "transfer-registered", "idempotency", transfer.Version, transfer.UpdatedAt);
+        database.TransferAuditEvents.Add(audit);
         try
         {
             await SaveAsync(cancellationToken, translateIdempotencyViolation: false);
             database.Entry(record).State = EntityState.Detached;
+            database.Entry(audit).State = EntityState.Detached;
             return new TransferRegistration(transfer, requestFingerprint, fingerprintVersion, true);
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyViolation(exception))
         {
             database.Entry(record).State = EntityState.Detached;
+            database.Entry(audit).State = EntityState.Detached;
             TransferRecord? existing = await database.Transfers.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.IdempotencyKey == transfer.IdempotencyKey, cancellationToken);
             if (existing is null)
@@ -54,6 +59,9 @@ public sealed class PostgresTransferStore(
 
         var record = TransferRecord.FromTransfer(transfer);
         database.Transfers.Add(record);
+        TransferAuditEventRecord audit = TransferAuditEventRecord.Create(transfer, null,
+            "transfer-created", "application", transfer.Version, transfer.UpdatedAt);
+        database.TransferAuditEvents.Add(audit);
         try
         {
             await SaveAsync(cancellationToken);
@@ -61,10 +69,12 @@ public sealed class PostgresTransferStore(
         finally
         {
             database.Entry(record).State = EntityState.Detached;
+            database.Entry(audit).State = EntityState.Detached;
         }
     }
 
-    public async Task UpdateAsync(Transfer transfer, long expectedVersion, CancellationToken cancellationToken)
+    public async Task UpdateAsync(Transfer transfer, long expectedVersion, CancellationToken cancellationToken,
+        TransferAuditMetadata? auditMetadata = null)
     {
         if (transfer.Version != checked(expectedVersion + 1))
         {
@@ -72,6 +82,20 @@ public sealed class PostgresTransferStore(
         }
 
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        TransferRecord? previous = await database.Transfers
+            .FromSqlInterpolated($"SELECT * FROM transfers WHERE id = {transfer.Id} FOR UPDATE")
+            .AsNoTracking()
+            .SingleOrDefaultAsync(cancellationToken);
+        if (previous is null)
+        {
+            throw new TransferStorageUnavailableException();
+        }
+
+        if (previous.Version != expectedVersion)
+        {
+            throw new TransferConcurrencyException();
+        }
+
         var record = TransferRecord.FromTransfer(transfer);
         var entry = database.Attach(record);
         entry.Property(current => current.State).IsModified = true;
@@ -80,11 +104,17 @@ public sealed class PostgresTransferStore(
         entry.Property(current => current.Version).IsModified = true;
         entry.Property(current => current.Version).OriginalValue = expectedVersion;
         OutboxMessageRecord? outbox = null;
+        TransferAuditEventRecord? auditRecord = null;
         if (transfer.State == TransferState.Completed)
         {
             outbox = OutboxMessageRecord.FromCompletedTransfer(transfer);
             database.OutboxMessages.Add(outbox);
         }
+        TransferState previousState = Enum.Parse<TransferState>(previous.State, ignoreCase: false);
+        TransferAuditMetadata metadata = auditMetadata ?? InferAudit(previousState, transfer.State);
+        auditRecord = TransferAuditEventRecord.Create(transfer, previousState, metadata.Reason,
+            metadata.Source, transfer.Version, transfer.UpdatedAt);
+        database.TransferAuditEvents.Add(auditRecord);
         try
         {
             await SaveAsync(cancellationToken);
@@ -101,6 +131,10 @@ public sealed class PostgresTransferStore(
             if (outbox is not null)
             {
                 database.Entry(outbox).State = EntityState.Detached;
+            }
+            if (auditRecord is not null)
+            {
+                database.Entry(auditRecord).State = EntityState.Detached;
             }
         }
     }
@@ -130,6 +164,25 @@ public sealed class PostgresTransferStore(
 
         try
         {
+            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            TransferRecord? current = await database.Transfers
+                .FromSqlInterpolated($"SELECT * FROM transfers WHERE id = {transfer.Id} FOR UPDATE")
+                .AsNoTracking()
+                .SingleOrDefaultAsync(cancellationToken);
+            if (current is null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return SubmissionClaimResult.NotFound;
+            }
+
+            if (current.State != TransferState.ReadyToSubmit.ToString() || current.Version != expectedVersion)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return current.State == TransferState.ReadyToSubmit.ToString()
+                    ? SubmissionClaimResult.InvalidState
+                    : SubmissionClaimResult.AlreadyClaimedOrSubmitted;
+            }
+
             int changed = await database.Transfers
                 .Where(item => item.Id == transfer.Id && item.State == TransferState.ReadyToSubmit.ToString() &&
                                item.Version == expectedVersion)
@@ -137,18 +190,21 @@ public sealed class PostgresTransferStore(
                     .SetProperty(item => item.State, transfer.State.ToString())
                     .SetProperty(item => item.UpdatedAt, transfer.UpdatedAt)
                     .SetProperty(item => item.Version, transfer.Version), cancellationToken);
+            TransferAuditEventRecord? audit = null;
             if (changed == 1)
             {
+                audit = TransferAuditEventRecord.Create(transfer,
+                    TransferState.ReadyToSubmit, "submission-claimed", "submission", transfer.Version,
+                    transfer.UpdatedAt);
+                database.TransferAuditEvents.Add(audit);
+                await SaveAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                database.Entry(audit).State = EntityState.Detached;
                 return SubmissionClaimResult.ClaimAcquired;
             }
 
-            TransferRecord? current = await database.Transfers.AsNoTracking()
-                .SingleOrDefaultAsync(item => item.Id == transfer.Id, cancellationToken);
-            return current is null
-                ? SubmissionClaimResult.NotFound
-                : current.State == TransferState.ReadyToSubmit.ToString()
-                    ? SubmissionClaimResult.InvalidState
-                    : SubmissionClaimResult.AlreadyClaimedOrSubmitted;
+            await transaction.RollbackAsync(cancellationToken);
+            return SubmissionClaimResult.AlreadyClaimedOrSubmitted;
         }
         catch (NpgsqlException exception) when (exception.IsTransient)
         {
@@ -198,4 +254,7 @@ public sealed class PostgresTransferStore(
             SqlState: PostgresErrorCodes.UniqueViolation,
             ConstraintName: "uq_transfers_idempotency_key"
         };
+
+    private static TransferAuditMetadata InferAudit(TransferState previous, TransferState next) =>
+        new($"{previous}->{next}", "persistence");
 }

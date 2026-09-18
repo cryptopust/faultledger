@@ -31,6 +31,20 @@ public sealed class OutboxPostgresTests(PostgresFixture fixture) : IClassFixture
 
         await using var verify = OpenContext(connectionString);
         Assert.Equal(1, await verify.OutboxCountAsync(TestContext.Current.CancellationToken));
+        await using var auditConnection = new NpgsqlConnection(connectionString);
+        await auditConnection.OpenAsync(TestContext.Current.CancellationToken);
+        await using var auditCommand = new NpgsqlCommand("SELECT previous_state, new_state, source FROM transfer_audit_events WHERE transfer_id = $1 ORDER BY transition_version", auditConnection);
+        auditCommand.Parameters.AddWithValue(transferId);
+        await using NpgsqlDataReader auditReader = await auditCommand.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+        var transitions = new List<(string? Previous, string New, string Source)>();
+        while (await auditReader.ReadAsync(TestContext.Current.CancellationToken))
+        {
+            transitions.Add((auditReader.IsDBNull(0) ? null : auditReader.GetString(0), auditReader.GetString(1),
+                auditReader.GetString(2)));
+        }
+
+        Assert.Equal(4, transitions.Count);
+        Assert.Equal(("Accepted", "Completed", "provider"), transitions[^1]);
     }
 
     [Fact]
@@ -53,6 +67,8 @@ public sealed class OutboxPostgresTests(PostgresFixture fixture) : IClassFixture
         Transfer? current = await verify.FindTransferAsync(transferId, TestContext.Current.CancellationToken);
         Assert.Equal(TransferState.Accepted, current!.State);
         Assert.Equal(0, await verify.OutboxCountAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(3, await verify.Database.SqlQuery<int>($"SELECT count(*) FROM transfer_audit_events WHERE transfer_id = {transferId}")
+            .SingleAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]

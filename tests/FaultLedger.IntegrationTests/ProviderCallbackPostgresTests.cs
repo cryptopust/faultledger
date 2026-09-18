@@ -69,6 +69,12 @@ public sealed class ProviderCallbackPostgresTests(PostgresFixture fixture) : ICl
         Assert.Equal(TransferState.Completed, current.State);
         Assert.Equal(1, await verify.ProviderInboxCountAsync(TestContext.Current.CancellationToken));
         Assert.Equal(1, await verify.OutboxCountAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(5, await verify.Database.SqlQuery<int>($"SELECT count(*) FROM transfer_audit_events WHERE transfer_id = {TransferId}")
+            .SingleAsync(TestContext.Current.CancellationToken));
+        List<string> transitions = await verify.Database.SqlQuery<string>($"SELECT coalesce(previous_state, 'NULL') || '->' || new_state AS \"Value\" FROM transfer_audit_events WHERE transfer_id = {TransferId} ORDER BY transition_version")
+            .ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("Submitting->Accepted", transitions[^2]);
+        Assert.Equal("Accepted->Completed", transitions[^1]);
     }
 
     [Fact]

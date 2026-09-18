@@ -1,11 +1,14 @@
 using System.Text.Json.Serialization;
 using FaultLedger.Api.Callbacks;
 using FaultLedger.Api.Transfers;
+using FaultLedger.Application.Diagnostics;
 using FaultLedger.Application.Transfers;
 using FaultLedger.Infrastructure;
 using FaultLedger.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 
 namespace FaultLedger.Api;
 
@@ -15,6 +18,15 @@ public sealed class Program
     {
         var builder = WebApplication.CreateBuilder(args);
         builder.Services.AddPostgresReadiness();
+        builder.Services.AddOpenTelemetry()
+            .WithTracing(tracing => tracing
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddSource(FaultLedgerTelemetry.SourceName))
+            .WithMetrics(metrics => metrics
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddMeter(FaultLedgerTelemetry.MeterName));
         builder.Services.AddTransferInfrastructure();
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddScoped<TransferService>();

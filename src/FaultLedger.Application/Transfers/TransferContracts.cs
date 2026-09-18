@@ -54,13 +54,16 @@ public enum RetryAdvice
 public interface ITransferStore
 {
     Task AddAsync(Transfer transfer, CancellationToken cancellationToken);
-    Task UpdateAsync(Transfer transfer, long expectedVersion, CancellationToken cancellationToken);
+    Task UpdateAsync(Transfer transfer, long expectedVersion, CancellationToken cancellationToken,
+        TransferAuditMetadata? audit = null);
     Task<Transfer?> FindAsync(Guid id, CancellationToken cancellationToken);
     Task<TransferRegistration> CreateOrGetAsync(Transfer transfer, string requestFingerprint, int fingerprintVersion,
         CancellationToken cancellationToken);
     Task<SubmissionClaimResult> TryClaimSubmissionAsync(Transfer transfer, long expectedVersion,
         CancellationToken cancellationToken);
 }
+
+public sealed record TransferAuditMetadata(string Reason, string Source);
 
 public sealed record TransferRegistration(Transfer Transfer, string? RequestFingerprint, int? FingerprintVersion, bool Created);
 

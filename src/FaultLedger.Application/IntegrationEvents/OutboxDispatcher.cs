@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using FaultLedger.Application.Diagnostics;
+
 namespace FaultLedger.Application.IntegrationEvents;
 
 public sealed class OutboxDispatcher(
@@ -19,6 +22,14 @@ public sealed class OutboxDispatcher(
         if (claimed is null)
         {
             return OutboxDispatchResult.NoMessage;
+        }
+
+        using Activity? activity = FaultLedgerTelemetry.ActivitySource.StartActivity("faultledger.outbox.dispatch");
+        activity?.SetTag("faultledger.outbox.id", claimed.Message.EventId);
+        activity?.SetTag("faultledger.transfer.id", claimed.Message.AggregateId);
+        if (claimed.AttemptCount > 1)
+        {
+            FaultLedgerTelemetry.OutboxRedeliveries.Add(1);
         }
 
         try

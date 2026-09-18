@@ -6,6 +6,7 @@ namespace FaultLedger.Infrastructure.Persistence;
 public sealed class FaultLedgerDbContext(DbContextOptions<FaultLedgerDbContext> options) : DbContext(options)
 {
     internal DbSet<TransferRecord> Transfers => Set<TransferRecord>();
+    internal DbSet<TransferAuditEventRecord> TransferAuditEvents => Set<TransferAuditEventRecord>();
     internal DbSet<ProviderInboxRecord> ProviderInbox => Set<ProviderInboxRecord>();
     internal DbSet<OutboxMessageRecord> OutboxMessages => Set<OutboxMessageRecord>();
 
@@ -38,6 +39,31 @@ public sealed class FaultLedgerDbContext(DbContextOptions<FaultLedgerDbContext> 
         transfer.Property(record => record.CreatedAt).HasColumnName("created_at");
         transfer.Property(record => record.UpdatedAt).HasColumnName("updated_at");
         transfer.Property(record => record.Version).HasColumnName("version").IsConcurrencyToken().ValueGeneratedNever();
+
+        var audit = modelBuilder.Entity<TransferAuditEventRecord>();
+        audit.ToTable("transfer_audit_events", table =>
+        {
+            table.HasCheckConstraint("ck_transfer_audit_new_state", "new_state IN ('Created', 'ReadyToSubmit', 'Submitting', 'Accepted', 'Failed', 'Unknown', 'Completed', 'ManualReview')");
+            table.HasCheckConstraint("ck_transfer_audit_previous_state", "previous_state IS NULL OR previous_state IN ('Created', 'ReadyToSubmit', 'Submitting', 'Accepted', 'Failed', 'Unknown', 'Completed', 'ManualReview')");
+            table.HasCheckConstraint("ck_transfer_audit_reason", "length(reason) BETWEEN 1 AND 128");
+            table.HasCheckConstraint("ck_transfer_audit_source", "length(source) BETWEEN 1 AND 64");
+            table.HasCheckConstraint("ck_transfer_audit_transition_version", "transition_version >= 0");
+            table.HasCheckConstraint("ck_transfer_audit_occurred_at", "isfinite(occurred_at)");
+        });
+        audit.HasKey(record => record.EventId).HasName("pk_transfer_audit_events");
+        audit.Property(record => record.EventId).HasColumnName("event_id").ValueGeneratedNever();
+        audit.Property(record => record.TransferId).HasColumnName("transfer_id");
+        audit.HasOne<TransferRecord>().WithMany().HasForeignKey(record => record.TransferId)
+            .HasConstraintName("fk_transfer_audit_events_transfers_transfer_id").OnDelete(DeleteBehavior.Restrict);
+        audit.HasIndex(record => new { record.TransferId, record.OccurredAt, record.EventId })
+            .HasDatabaseName("ix_transfer_audit_transfer_time");
+        audit.Property(record => record.PreviousState).HasColumnName("previous_state").HasMaxLength(32);
+        audit.Property(record => record.NewState).HasColumnName("new_state").HasMaxLength(32).IsRequired();
+        audit.Property(record => record.Reason).HasColumnName("reason").HasMaxLength(128).IsRequired();
+        audit.Property(record => record.Source).HasColumnName("source").HasMaxLength(64).IsRequired();
+        audit.Property(record => record.ProviderReference).HasColumnName("provider_reference").HasMaxLength(Transfer.ReferenceMaximumLength);
+        audit.Property(record => record.OccurredAt).HasColumnName("occurred_at");
+        audit.Property(record => record.TransitionVersion).HasColumnName("transition_version");
 
         var inbox = modelBuilder.Entity<ProviderInboxRecord>();
         inbox.ToTable("provider_inbox", table =>

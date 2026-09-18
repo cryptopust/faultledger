@@ -120,7 +120,8 @@ public sealed class UnknownOutcomeLaboratoryTests
             return Task.FromResult(current?.Id == id ? Clone(current) : null);
         }
 
-        public Task UpdateAsync(Transfer transfer, long expectedVersion, CancellationToken cancellationToken)
+        public Task UpdateAsync(Transfer transfer, long expectedVersion, CancellationToken cancellationToken,
+            TransferAuditMetadata? audit = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (current is null || current.Id != transfer.Id || current.Version != expectedVersion)

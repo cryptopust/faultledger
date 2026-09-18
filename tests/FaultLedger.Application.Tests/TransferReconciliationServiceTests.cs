@@ -272,7 +272,8 @@ public sealed class TransferReconciliationServiceTests
             return Task.FromResult<Transfer?>(id == current.Id ? Clone(current) : null);
         }
 
-        public Task UpdateAsync(Transfer transfer, long expectedVersion, CancellationToken cancellationToken)
+        public Task UpdateAsync(Transfer transfer, long expectedVersion, CancellationToken cancellationToken,
+            TransferAuditMetadata? audit = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (transfer.Id != current.Id || Interlocked.CompareExchange(ref currentVersion,

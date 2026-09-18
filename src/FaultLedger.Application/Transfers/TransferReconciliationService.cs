@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using FaultLedger.Application.Diagnostics;
 using FaultLedger.Domain;
 
 namespace FaultLedger.Application.Transfers;
@@ -9,6 +11,9 @@ public sealed class TransferReconciliationService(
 {
     public async Task<ReconciliationDetails> ReconcileAsync(Guid transferId, CancellationToken cancellationToken)
     {
+        using Activity? activity = FaultLedgerTelemetry.ActivitySource.StartActivity("faultledger.transfer.reconcile");
+        activity?.SetTag("faultledger.transfer.id", transferId);
+        FaultLedgerTelemetry.Reconciliations.Add(1);
         cancellationToken.ThrowIfCancellationRequested();
         Transfer? transfer = await store.FindAsync(transferId, cancellationToken);
         if (transfer is null)
@@ -81,7 +86,8 @@ public sealed class TransferReconciliationService(
 
         long expectedVersion = transfer.Version;
         transfer.SendToManualReview(reason, timeProvider.GetUtcNow());
-        await store.UpdateAsync(transfer, expectedVersion, cancellationToken);
+        await store.UpdateAsync(transfer, expectedVersion, cancellationToken,
+            new TransferAuditMetadata("manual-review-requested", "operator"));
         return TransferDetails.FromTransfer(transfer);
     }
 
@@ -96,7 +102,8 @@ public sealed class TransferReconciliationService(
         transition(transfer, timeProvider.GetUtcNow());
         try
         {
-            await store.UpdateAsync(transfer, expectedVersion, cancellationToken);
+            await store.UpdateAsync(transfer, expectedVersion, cancellationToken,
+                new TransferAuditMetadata($"reconciliation:{outcome}", "reconciliation"));
             return new ReconciliationDetails(TransferDetails.FromTransfer(transfer), outcome, message);
         }
         catch (TransferConcurrencyException)

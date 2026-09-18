@@ -2,5 +2,8 @@
   <ItemGroup>
     <ProjectReference Include="../FaultLedger.Application/FaultLedger.Application.csproj" />
     <ProjectReference Include="../FaultLedger.Infrastructure/FaultLedger.Infrastructure.csproj" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
   </ItemGroup>
 </Project>

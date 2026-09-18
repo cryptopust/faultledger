@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using FaultLedger.Application.Diagnostics;
 using FaultLedger.Application.Transfers;
 using FaultLedger.Domain;
 using Microsoft.EntityFrameworkCore;
@@ -57,6 +59,12 @@ public sealed class PostgresProviderInboxStore(
 
             return new InboxReceipt(InboxReceiptOutcome.Duplicate, existing.InboxId);
         }
+        catch (DbUpdateException exception) when (exception.InnerException is NpgsqlException { IsTransient: true } transient)
+        {
+            database.Entry(record).State = EntityState.Detached;
+            logger.LogError("Provider callback receipt failed ({FailureType}).", transient.GetType().Name);
+            throw new TransferStorageUnavailableException();
+        }
         catch (NpgsqlException exception) when (exception.IsTransient)
         {
             logger.LogError("Provider callback receipt failed ({FailureType}, {SqlState}).",
@@ -78,6 +86,9 @@ public sealed class PostgresProviderInboxStore(
             await transaction.RollbackAsync(cancellationToken);
             return null;
         }
+
+        using Activity? activity = FaultLedgerTelemetry.ActivitySource.StartActivity("faultledger.callback.process");
+        activity?.SetTag("faultledger.inbox.id", inbox.InboxId);
 
         inbox.ProcessingStatus = InboxProcessingStatus.Processing.ToString();
         inbox.AttemptCount++;
@@ -133,6 +144,8 @@ public sealed class PostgresProviderInboxStore(
         }
 
         Transfer transfer = record.ToTransfer();
+        TransferState previousState = transfer.State;
+        long previousVersion = transfer.Version;
         CallbackProcessingOutcome outcome = ProviderCallbackStateMachine.Apply(transfer, callback,
             timeProvider.GetUtcNow());
         if (outcome == CallbackProcessingOutcome.Applied)
@@ -142,6 +155,7 @@ public sealed class PostgresProviderInboxStore(
             record.UpdatedAt = transfer.UpdatedAt;
             record.Version = transfer.Version;
             inbox.TransferId = transfer.Id;
+            AddCallbackAuditEvents(transfer, previousState, previousVersion, callback);
             if (transfer.State == TransferState.Completed)
             {
                 database.OutboxMessages.Add(OutboxMessageRecord.FromCompletedTransfer(transfer));
@@ -155,6 +169,23 @@ public sealed class PostgresProviderInboxStore(
                 CallbackProcessingOutcome.AlreadyApplied => "Callback evidence was already reflected in the durable transfer.",
                 _ => "The callback was retained as stale evidence; the durable transfer state was not regressed."
             });
+    }
+
+    private void AddCallbackAuditEvents(Transfer transfer, TransferState previousState, long previousVersion,
+        ProviderCallbackEnvelope callback)
+    {
+        string reason = $"provider-callback:{callback.EventType}";
+        if (callback.EventType == ProviderCallbackEventType.Completed && previousState == TransferState.Submitting)
+        {
+            database.TransferAuditEvents.Add(TransferAuditEventRecord.Create(transfer, TransferState.Submitting,
+                reason, "callback", previousVersion + 1, transfer.UpdatedAt, TransferState.Accepted));
+            database.TransferAuditEvents.Add(TransferAuditEventRecord.Create(transfer, TransferState.Accepted,
+                reason, "callback", transfer.Version, transfer.UpdatedAt));
+            return;
+        }
+
+        database.TransferAuditEvents.Add(TransferAuditEventRecord.Create(transfer, previousState, reason,
+            "callback", transfer.Version, transfer.UpdatedAt));
     }
 
     private static bool IsEventDuplicate(DbUpdateException exception) => exception.InnerException is PostgresException

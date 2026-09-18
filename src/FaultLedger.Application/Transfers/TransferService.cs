@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using FaultLedger.Application.Diagnostics;
 using FaultLedger.Domain;
 
 namespace FaultLedger.Application.Transfers;
@@ -10,6 +12,7 @@ public sealed class TransferService(ITransferStore store, ITransferProvider prov
     public async Task<TransferCreateOutcome> CreateWithOutcomeAsync(CreateTransferCommand command,
         CancellationToken cancellationToken)
     {
+        using Activity? activity = FaultLedgerTelemetry.ActivitySource.StartActivity("faultledger.transfer.create");
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(command);
         Transfer transfer;
@@ -37,12 +40,19 @@ public sealed class TransferService(ITransferStore store, ITransferProvider prov
                 (registration.FingerprintVersion is not null &&
                  registration.FingerprintVersion != TransferRequestFingerprint.CurrentVersion))
             {
+                FaultLedgerTelemetry.IdempotencyConflicts.Add(1);
                 throw new IdempotencyConflictException();
             }
 
             transfer = registration.Transfer;
+            activity?.SetTag("faultledger.transfer.id", transfer.Id);
+            activity?.SetTag("faultledger.transfer.state", transfer.State.ToString());
+            FaultLedgerTelemetry.IdempotencyReplays.Add(1);
             return new TransferCreateOutcome(TransferDetails.FromTransfer(transfer), true);
         }
+
+        activity?.SetTag("faultledger.transfer.id", transfer.Id);
+        FaultLedgerTelemetry.TransfersCreated.Add(1);
 
         long expectedVersion = transfer.Version;
         transfer.BeginSubmission(timeProvider.GetUtcNow());
@@ -58,8 +68,12 @@ public sealed class TransferService(ITransferStore store, ITransferProvider prov
 
         cancellationToken.ThrowIfCancellationRequested();
         ProviderSubmissionResult result;
+        using Activity? providerActivity = FaultLedgerTelemetry.ActivitySource.StartActivity(
+            "faultledger.provider.submit");
+        providerActivity?.SetTag("faultledger.transfer.id", transfer.Id);
         try
         {
+            FaultLedgerTelemetry.ProviderSubmissions.Add(1);
             result = await provider.SubmitAsync(
                 new ProviderTransferRequest(transfer.Id, transfer.ClientReference, transfer.Money), cancellationToken);
         }
@@ -67,9 +81,13 @@ public sealed class TransferService(ITransferStore store, ITransferProvider prov
         {
             transfer.MarkUnknown("The provider call was cancelled after dispatch authority was acquired.",
                 timeProvider.GetUtcNow());
-            await store.UpdateAsync(transfer, transfer.Version - 1, CancellationToken.None);
+            FaultLedgerTelemetry.UnknownOutcomes.Add(1);
+            await store.UpdateAsync(transfer, transfer.Version - 1, CancellationToken.None,
+                new TransferAuditMetadata("provider-call-cancelled-after-dispatch", "provider"));
             throw;
         }
+
+        providerActivity?.SetTag("faultledger.provider.outcome", result.AcceptanceEvidence.ToString());
 
         if (!result.IsConfirmedAccepted || result.ProviderReference is null)
         {
@@ -77,18 +95,22 @@ public sealed class TransferService(ITransferStore store, ITransferProvider prov
             if (result.AcceptanceEvidence == ProviderAcceptanceEvidence.AcceptanceAmbiguous)
             {
                 transfer.MarkUnknown(result.SafeMessage, timeProvider.GetUtcNow());
-                await store.UpdateAsync(transfer, submissionVersion, CancellationToken.None);
+                FaultLedgerTelemetry.UnknownOutcomes.Add(1);
+                await store.UpdateAsync(transfer, submissionVersion, CancellationToken.None,
+                    new TransferAuditMetadata("provider-acceptance-ambiguous", "provider"));
                 return new TransferCreateOutcome(TransferDetails.FromTransfer(transfer), false);
             }
 
             transfer.MarkFailed(result.SafeMessage, timeProvider.GetUtcNow());
-            await store.UpdateAsync(transfer, submissionVersion, CancellationToken.None);
+            await store.UpdateAsync(transfer, submissionVersion, CancellationToken.None,
+                new TransferAuditMetadata("provider-rejected-before-acceptance", "provider"));
             throw new ProviderSubmissionException(result);
         }
 
         expectedVersion = transfer.Version;
         transfer.MarkAccepted(result.ProviderReference, timeProvider.GetUtcNow());
-        await store.UpdateAsync(transfer, expectedVersion, cancellationToken);
+        await store.UpdateAsync(transfer, expectedVersion, cancellationToken,
+            new TransferAuditMetadata("provider-accepted", "provider"));
         return new TransferCreateOutcome(TransferDetails.FromTransfer(transfer), !registration.Created);
     }
 

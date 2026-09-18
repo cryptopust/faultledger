@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using FaultLedger.Application.Diagnostics;
 using FaultLedger.Application.Transfers;
 using Microsoft.AspNetCore.Http.HttpResults;
 
@@ -43,18 +45,33 @@ public static class ProviderCallbackEndpoints
     private static async Task<IResult> ReceiveAsync(HttpRequest request, ProviderCallbackService service,
         ProviderCallbackAuthenticator authenticator, TimeProvider timeProvider, CancellationToken cancellationToken)
     {
+        using Activity? activity = FaultLedgerTelemetry.ActivitySource.StartActivity("faultledger.callback.receive");
         if (request.ContentLength is > 2048)
         {
             throw new ProviderCallbackValidationException("The callback body exceeds the bounded callback envelope size.");
         }
 
-        using var body = new MemoryStream();
-        await request.Body.CopyToAsync(body, cancellationToken);
-        byte[] bytes = body.ToArray();
-        if (bytes.Length > 2048)
+        using var body = new MemoryStream(capacity: 2048);
+        byte[] buffer = new byte[1024];
+        int total = 0;
+        while (true)
         {
-            throw new ProviderCallbackValidationException("The callback body exceeds the bounded callback envelope size.");
+            int read = await request.Body.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            total += read;
+            if (total > 2048)
+            {
+                throw new ProviderCallbackValidationException("The callback body exceeds the bounded callback envelope size.");
+            }
+
+            await body.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
         }
+
+        byte[] bytes = body.ToArray();
         if (!authenticator.IsValid(bytes, request.Headers["X-FaultLedger-Signature"].FirstOrDefault()))
         {
             throw new CallbackAuthenticationException();
@@ -81,6 +98,11 @@ public static class ProviderCallbackEndpoints
             payload.ProviderReference, payload.Evidence ?? eventType.ToString(), occurredAt, payload.PayloadVersion);
         string normalizedPayload = JsonSerializer.Serialize(payload, SerializerOptions);
         InboxReceipt receipt = await service.ReceiveAsync(callback, normalizedPayload, cancellationToken);
+        activity?.SetTag("faultledger.inbox.id", receipt.InboxId);
+        if (receipt.Outcome == InboxReceiptOutcome.Duplicate)
+        {
+            FaultLedgerTelemetry.CallbackDuplicates.Add(1);
+        }
 
         var response = new ProviderCallbackReceiptResponse(receipt.InboxId, receipt.Outcome.ToString(),
             "Callback durably received; business processing is recoverable from the inbox.");
