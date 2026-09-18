@@ -1,172 +1,220 @@
 # FaultLedger
 
-A deterministic .NET engineering failure laboratory for studying distributed
-financial-style orchestration. It is not a payment processor, bank, wallet,
-real-money service, or compliance-certified platform. Synthetic data only.
+FaultLedger is a deterministic .NET laboratory for studying failure modes in
+distributed financial-style transaction orchestration.
 
-## Current stage: transactional outbox and at-least-once delivery (6)
+FaultLedger is not a real payment processor and does not move real money. It is
+not a bank, wallet, card processor, PCI-certified platform, or production-ready
+financial system. Use synthetic data and local-only credentials.
 
-The existing governance, ten-project .NET 10 solution, health endpoints,
-PostgreSQL development Compose configuration, Dockerfile and CI are retained.
-Stage 1's exact Money, guarded Transfer state machine, controlled timestamps,
-explicit application orchestration, PostgreSQL EF mappings, migration, optimistic
-version checks and transfer POST/GET contracts remain in place. Stage 2 adds a
-deterministic MockProvider scenario catalog, an explicit provider acceptance
-boundary, typed acceptance evidence, and a process-local simulated provider
-ledger with separate submission-attempt and accepted-operation counters.
+## Engineering goals
 
-**Evidence boundary:** non-Docker behavior, compiled boundaries and migration
-model/SQL generation can run locally. Real migration execution, PostgreSQL
-round trips, concurrency and successful end-to-end submission require Docker.
-Docker remains unavailable here; those tests fail prerequisite initialization,
-not skip. Container builds/runtime and remote CI execution remain unverified.
-See the [Stage 1 validation record](docs/runbooks/stage1-validation.md).
-The [bootstrap record](docs/runbooks/bootstrap-validation.md) is historical.
+The repository makes failure boundaries visible: exact money, explicit transfer
+states, durable idempotency, no blind repost after ambiguous transmission,
+recoverable callback receipt, transactional outbox delivery, duplicate-safe
+consumption, and honest evidence classification. Correctness lives in explicit
+domain rules and PostgreSQL invariants, never a process-local lock or cache.
 
-Stage 3 adds versioned SHA-256 request fingerprints, PostgreSQL uniqueness-race
-recovery, same-request replay, explicit same-key/different-request conflicts,
-and a durable `ReadyToSubmit` to `Submitting` claim committed before provider
-I/O. Stage 4 maps ambiguous post-dispatch outcomes to explicit `Unknown`,
-exposes `DoNotRepost`, and reconciles only through an explicit provider lookup
-correlated by durable `TransferId`. Replays and reconciliation never invoke
-`SubmitAsync` again; the fake provider's `SubmissionAttempts` counter remains
-the external-call evidence. The provider ledger is still fake external truth
-only, not a FaultLedger idempotency mechanism.
+## Architecture
 
-Stage 5 adds a synthetic HMAC-authenticated callback endpoint, a PostgreSQL
-durable callback inbox, provider-event deduplication, recoverable processing,
-and non-regressive out-of-order handling. Stage 6 adds a versioned
-`TransferCompleted` transactional outbox, PostgreSQL claim leases, stable event
-IDs across at-least-once redelivery, a durable duplicate-safe simulated
-consumer, and a Compose Toxiproxy path for real HTTP fault injection. Callback
-completion and reconciliation completion create one logical outbox event in
-the same transaction as the local state change. **Not implemented:** a message
-broker, global ordering, exactly-once distributed delivery, audit history, or
-automatic financial repost. A crash after durable `Submitting` and before
-FaultLedger classifies the provider result remains a conservative unresolved
-recovery boundary; Stage 4 does not reset it based on elapsed time or a single
-`NotFound` lookup.
-Full Definition of Done is not satisfied while PostgreSQL evidence is blocked.
+FaultLedger is a small modular monolith: API -> Application -> Domain, with
+Infrastructure adapting PostgreSQL, HTTP, and synthetic provider boundaries.
+PostgreSQL owns transfers, fingerprints, inbox, outbox, and audit history. The
+outbox dispatcher publishes through Toxiproxy to a small simulated consumer.
+There is no Redis, broker, CQRS/event-sourcing framework, or real provider rail.
+See the [real topology](docs/architecture/faultledger-topology.md) and
+[repository graph](docs/architecture/repository-structure.md).
 
-## Prerequisites
+## Repository structure
 
-Use SDK **10.0.203** from [global.json](global.json). Its exact pin remains active
-under existing governance; this stage does not relax the roll-forward checker.
-Rider 2026.2.1 is installed on the development workstation. Open
-`FaultLedger.slnx`; CLI solution loading/build/discovery are verified separately
-from unverified interactive Rider behavior.
+- `src/FaultLedger.Domain`: exact `Money` and guarded `Transfer` transitions.
+- `src/FaultLedger.Application`: orchestration, contracts, diagnostics.
+- `src/FaultLedger.Infrastructure`: EF/PostgreSQL, provider lab, inbox/outbox.
+- `src/FaultLedger.Api`: Minimal API, health checks, telemetry composition.
+- `src/FaultLedger.SimulatedConsumer`: durable duplicate-safe lab consumer.
+- `tests`: domain, application, infrastructure, architecture, and real
+  PostgreSQL/Testcontainers integration evidence.
 
-Docker with Linux containers and Docker Compose are required for the full test
-suite and local stack. Tests use isolated Testcontainers PostgreSQL instances,
-not the Compose development database. PowerShell runs the governance verifier.
+## Running locally
 
-## Validate locally
-
-From the repository root, use the same application commands as CI:
-
-```text
-dotnet restore --locked-mode
-dotnet build --no-restore
-dotnet test --no-build --no-restore
-dotnet test --no-build --no-restore
-dotnet format --verify-no-changes --no-restore
-git diff --check
-git status --short
-```
-
-Plain root `dotnet build` and `dotnet test` also select the complete solution.
-On Windows run `powershell -NoProfile -File scripts/Verify-Governance.ps1`;
-on PowerShell 7 use `pwsh` instead. Do not use `-BootstrapOnly` after stage 0A.
-No test filter is used by CI or the full Definition of Done gate. For the
-explicitly authorized conditional local checkpoint, run the non-Docker filter
-three times as well; a missing Docker engine is not a passing database suite.
-
-## Run the local stack
-
-Follow the [local development runbook](docs/runbooks/local-development.md) to copy
-`.env.example` without overwriting existing settings, choose an obvious local-only
-password, and start the API plus PostgreSQL. No real secrets belong here.
+Install the SDK pinned by `global.json`. Docker with Linux containers is needed
+for the full suite and local stack. Copy `.env.example` to an untracked `.env`
+and replace the explicit placeholder with a synthetic local password. Then:
 
 ```text
 docker compose config --quiet
 docker compose up -d --build --wait --wait-timeout 120
 docker compose ps
-curl --fail http://localhost:8080/health/live
-curl --fail http://localhost:8080/health/ready
 docker compose down
 ```
 
-Do not add `--volumes` to shutdown: retain the named development volume.
-For native `dotnet run`, set `ConnectionStrings__Postgres` explicitly; .NET does
-not automatically load `.env`. The runbook provides shell-specific examples.
-The Compose `migrate` one-shot service applies checked-in migrations before the
-API and simulated consumer start. Native development still uses the [explicit
-migration workflow](docs/runbooks/transfer-persistence.md); ordinary startup
-does not silently migrate the schema.
+Do not add `--volumes` to routine shutdown. The [local runbook](docs/runbooks/local-development.md)
+contains native-host and migration instructions.
 
-## Transfer API (synthetic laboratory only)
+## Running tests
 
-`POST /api/transfers` accepts `clientReference`, `idempotencyKey`, `amount`, and
-`currency`. For example:
-
-```json
-{"clientReference":"order-1001","idempotencyKey":"order-1001-attempt","amount":125.50,"currency":"USD"}
+```text
+powershell -NoProfile -File scripts/Verify-Governance.ps1
+dotnet restore --locked-mode
+dotnet build --no-restore
+dotnet test --no-build --no-restore
+dotnet test --no-build --no-restore --filter 'Category!=RequiresDocker'
+dotnet format --verify-no-changes --no-restore
 ```
 
-Amounts use exact fixed-point JSON numeric tokens with at most 20 integer and
-8 fractional digits. Exponents, quoted numbers and excessive precision are
-rejected rather than rounded. Currency validates three ASCII letters only,
-not official currency status. References use ASCII letters, digits, `.`, `_`,
-`:`, and `-`; client references allow 1-100 characters and keys 1-128.
+The full suite intentionally fails rather than silently skipping when Docker is
+unavailable. The filtered suite is diagnostic only; it is not PostgreSQL proof.
 
-Successful POST returns `201`, a Location, and an explicit response in `Accepted`
-state, not `Completed`. `GET /api/transfers/{id}` reads local durable state;
-missing identities produce a typed 404. Validation returns 400, duplicate keys
-and concurrency conflicts 409, and classified persistence outages 503. An
-ambiguous provider response returns `202` with `state=Unknown`, `isFinal=false`,
-and `retryAdvice=DoNotRepost`; replaying the same key returns HTTP `200` for the
-same transfer without resubmission. `POST /api/transfers/{id}/reconcile` performs
-one explicit provider lookup and resolves only from confirmed evidence.
-`NotFound`, `StillUnknown`, and lookup transport failure preserve Unknown and
-never authorize repost. No entity or stack trace is returned. Keys are globally
-scoped and case-sensitive.
+## Money model
 
-Do not automatically repost or replace a key after an error. A crash after
-durable Submitting may leave a possibly accepted operation without local
-certainty. No recovery/resubmission worker exists. This unauthenticated local
-laboratory must not be exposed to an untrusted network or real payment data.
+Money uses `decimal`, explicit three-letter uppercase currency, PostgreSQL
+`numeric(28,8)`, invariant canonicalization, and rejection of unexpected
+precision. JSON amounts must be fixed-point numeric tokens; quoted values,
+exponents, excessive scale, zero, and negatives are rejected rather than rounded.
 
-## Health contract
+## Transfer lifecycle
 
-| Endpoint | Meaning | HTTP/body |
-| --- | --- | --- |
-| GET `/health/live` | The process can answer; PostgreSQL is deliberately excluded | `200 Healthy`, including database/configuration failures |
-| GET `/health/ready` | A safely configured PostgreSQL connection can execute `SELECT 1` | `200 Healthy` on success; `503 Unhealthy` on unavailable/invalid configuration |
+The guarded lifecycle is `Created -> ReadyToSubmit -> Submitting`, then confirmed
+`Accepted`/`Failed`, ambiguous `Unknown`, lookup/callback resolution to
+`Accepted`/`Completed`/`Failed`, or `ManualReview`. Terminal or stronger evidence
+cannot be overwritten by a stale callback. Arbitrary state assignment is not a
+public domain operation.
 
-Responses expose neither connection strings nor exception details. Probe
-connection/query timeouts are two seconds each with a five-second health-check
-deadline. Request cancellation propagates. Missing or malformed configuration and
-the unchanged `CHANGE_ME_LOCAL_ONLY` placeholder do not make readiness healthy.
-Configuration is captured when the probe is first created; changing it requires
-host recreation. A database outage does not itself prevent process startup.
-Readiness checks connectivity, not whether migrations have been applied or
-whether a transfer outcome is known. Operators must apply migrations explicitly.
+## Idempotency and high-contention concurrency
 
-## Repository guidance
+One globally scoped, case-sensitive idempotency key maps to one immutable,
+versioned SHA-256 request fingerprint. Same key/same fingerprint replays the
+durable operation; same key/different fingerprint is a conflict. PostgreSQL
+uniqueness and a durable `ReadyToSubmit -> Submitting` claim prevent ordinary
+multi-host races. A replay never steals a stranded `ReadyToSubmit` claim; this
+conservative no-repost behavior is a documented limitation.
 
-Read [AGENTS.md](AGENTS.md), [CONTRIBUTING.md](CONTRIBUTING.md), and
-[SECURITY.md](SECURITY.md). Stage-0A documents retain their historical bootstrap
-status paragraphs; their engineering rules remain active. This README and the
-validation record describe the current implementation/evidence, not those older
-status snapshots.
+## Provider failure laboratory
 
-See [repository structure](docs/architecture/repository-structure.md),
-[transfer design](docs/architecture/transfer-domain.md),
-[durable callback inbox](docs/architecture/durable-callback-inbox.md),
-[transactional outbox](docs/architecture/transactional-outbox.md),
-[outbox crash scenarios](docs/scenarios/outbox-crash-recovery.md),
-[network-failure scenarios](docs/scenarios/network-failures.md),
-[ADR 0002](docs/adr/0002-transfer-domain-and-persistence.md),
-[ADR 0003](docs/adr/0003-deterministic-provider-failure-model.md), and the
-[scenario index](docs/scenarios/README.md). Prompt 1 authorizes reviewed local
-checkpoint commits only; no push, release, tag or remote mutation is authorized.
+Named synthetic scenarios distinguish failure before acceptance from ambiguous
+failure after possible acceptance. Submission attempt and accepted-operation
+counters are separate observable facts. The provider is fake external truth,
+not FaultLedger's idempotency mechanism. See [scenario details](docs/scenarios/mock-provider.md).
+
+## Unknown outcomes, DoNotRepost, and reconciliation
+
+A missing success response does not prove failure. Ambiguous dispatch becomes
+`Unknown` with `DoNotRepost`. Reconciliation performs `LookupAsync` only and
+distinguishes accepted, completed, rejected, still unknown, temporary failure,
+and `NotFound`. `NotFound`, elapsed time, lease expiry, cancellation, or restart
+does not authorize a new `SubmitAsync` call.
+
+## Durable callback inbox
+
+`POST /api/provider-callbacks` requires a synthetic HMAC signature, rejects
+unknown JSON members, and bounds the streamed body at 2048 bytes before buffering
+the full envelope. Valid receipt is committed before HTTP acknowledgement.
+Provider event ID uniqueness makes repeated/concurrent delivery safe. Processing
+is recoverable and commits Transfer mutation, inbox status, audit event, and any
+required outbox event together. The host currently exposes the processing service
+but does not register an automatic inbox worker; tests drive processing explicitly.
+
+## Duplicate and out-of-order callbacks
+
+Duplicates return the original inbox identity and produce no second logical
+effect. `Completed -> Accepted` and completed/accepted followed by rejection are
+stale evidence, not state regressions. Callback/reconciliation contention relies
+on PostgreSQL row/optimistic concurrency semantics.
+
+## Transactional outbox and at-least-once delivery
+
+`TransferCompleted` is created in the same PostgreSQL transaction as completion.
+Dispatchers claim due work with `FOR UPDATE SKIP LOCKED`, persist a recoverable
+lease and fencing token, release the transaction, then perform HTTP. Publication
+is at least once: a remote effect may commit before local `published_at` does.
+Redelivery uses the same event ID. No exactly-once distributed-delivery claim is
+made. See [outbox architecture](docs/architecture/transactional-outbox.md).
+
+## Consumer idempotency and crash/restart behavior
+
+The simulated consumer durably keys receipts by event ID, rejects a reused ID
+for a different immutable message, counts every receipt, and applies one logical
+effect. Pending inbox/outbox/audit/transfer truth survives host restart because
+PostgreSQL is authoritative. Process memory is never the durable correctness
+boundary.
+
+## Toxiproxy network failures
+
+Compose routes `FaultLedger -> Toxiproxy -> simulated consumer`. Tests model
+latency timeout, unavailable connection, and response-path loss after a durable
+remote effect. A timeout is ambiguous; it cannot prove non-delivery. These tests
+exist but were not executed on this Docker-unavailable workstation. See
+[network scenarios](docs/scenarios/network-failures.md).
+
+## Audit history
+
+`transfer_audit_events` stores bounded, append-oriented local history: previous
+and new state, source, reason category, safe provider reference, version, and
+time. Audit rows commit with the state transition and are distinct from inbox,
+outbox, and logs. Raw callback payloads and secrets are excluded. FaultLedger is
+not event sourced.
+
+## Observability
+
+The API registers OpenTelemetry ASP.NET Core/HttpClient instrumentation and the
+`FaultLedger` ActivitySource/Meter. Focused spans cover transfer creation,
+provider submission, reconciliation, callback receive/process, and outbox
+dispatch. Counters cover created transfers, provider submissions, Unknown,
+reconciliation, idempotency replay/conflict, callback duplicates, and outbox
+redelivery. No exporter is bundled. Metric labels exclude transfer IDs, payloads,
+secrets, authorization values, connection strings, and money fields.
+The [observability contract](docs/architecture/observability.md) maps each metric
+to the operational question it answers.
+
+## Health and public API
+
+- `GET /health/live`: process liveness only; no external dependency.
+- `GET /health/ready`: safely configured PostgreSQL responds to `SELECT 1`.
+- `POST /api/transfers`: validated creation/idempotent replay.
+- `GET /api/transfers/{id}`: durable local state.
+- `POST /api/transfers/{id}/reconcile`: lookup-only ambiguity resolution.
+- `POST /api/provider-callbacks`: bounded authenticated durable receipt.
+
+Readiness excludes the simulated consumer/Toxiproxy and does not prove migrations
+are current or a financial outcome is known. The API is an unauthenticated local
+lab and must not be exposed to an untrusted network.
+
+## Scenario catalog, core invariants, and traceability
+
+The [scenario catalog](docs/scenarios/README.md), [invariant catalog](docs/invariants.md),
+and [test matrix](docs/test-matrix.md) connect each claim to its enforcement and
+test. Governance lives in [AGENTS.md](AGENTS.md) and `docs/engineering`.
+
+## Evidence status
+
+### Proven in the current environment
+
+- Governance verifier, locked restore, build, non-Docker tests, format, and
+  package vulnerability query.
+- Exact Money/domain transitions, deterministic provider scenarios, no-repost
+  orchestration, reconciliation semantics, callback HTTP contract/body bound,
+  dispatcher logic, and instrumentation-boundary tests.
+
+### Implemented but Docker-blocked
+
+- Actual migration execution and PostgreSQL constraint/transaction evidence.
+- 100-way idempotency contention and multi-instance/restart evidence.
+- Durable inbox/outbox/audit/consumer dedupe and crash-after-publish scenarios.
+- Live Compose and Toxiproxy latency/unavailable/response-loss scenarios.
+
+### Documented design or limitation
+
+- No global delivery ordering; fixed five-second outbox retry; no max attempts
+  or dead-letter workflow; dispatcher lease is not renewed during slow publish.
+- No automatic callback inbox worker in the application host.
+- A crash leaving `ReadyToSubmit` or `Submitting` remains conservatively
+  unresolved; elapsed time never authorizes automatic repost.
+- Synthetic external systems, shared PostgreSQL in the Compose lab, no exporter,
+  no real provider integration, no security/compliance certification.
+
+## Non-goals
+
+Kafka, RabbitMQ, Redis, Kubernetes, service mesh, event sourcing, a CQRS
+framework, global ordering, automatic financial resubmission, a wallet/account
+system, a real ledger, production deployment, and real financial data are out of
+scope. FaultLedger finishes as a focused failure laboratory.

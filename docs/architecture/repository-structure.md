@@ -23,8 +23,8 @@ files. Test defaults explicitly import the root props rather than replacing them
 | --- | --- |
 | Domain | Immutable Money, validated Transfer identity/references, explicit state transitions and controlled timestamps |
 | Application | Transfer creation/submission orchestration, transfer-specific persistence/provider contracts and read model |
-| Infrastructure | PostgreSQL readiness, EF persistence records/mappings/migration, optimistic store, deterministic MockProvider scenarios/ledger, transactional outbox dispatcher and HTTP publisher |
-| Api | Composition root, liveness/readiness, explicit POST/GET transfer DTOs and sanitized errors |
+| Infrastructure | PostgreSQL readiness, EF persistence records/mappings/migration, optimistic store, durable Transfer audit history, deterministic MockProvider scenarios/ledger, transactional outbox dispatcher and HTTP publisher |
+| Api | Composition root, liveness/readiness, OpenTelemetry registration, explicit POST/GET transfer DTOs and sanitized errors |
 | SimulatedConsumer | Docker/in-process lab fixture that durably records integration-event receipts and deduplicates logical effects in PostgreSQL; not a second business system |
 | Architecture.Tests | Evaluate actual MSBuild project/package/framework references and strict properties |
 | Domain.Tests | Compiled boundary checks, exact money, invalid input, all state edges, terminal protection and timestamps |
